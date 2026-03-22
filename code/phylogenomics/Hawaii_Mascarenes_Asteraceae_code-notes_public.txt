@@ -1,0 +1,2854 @@
+=======================================================================
+Hawaiian and Mascarenes Asteraceae-wide: island biogeography and community assembly
+
+This document contains notes and code for the Hawaii and Mascarenes bioinformatics.
+Dataset: New Island samples combined with PAFTOL samples (Asteraceae-wide pipeline)
+
+Aim: build phylogenies for native lineages -> divergence time estimation -> DAISIE macroevolutionary analyses
+
+Key details: 
+* 265 new island samples (Target capture with Angio353+Comp1061)
+* 176 PAFTOL/GAP Asteraceae samples (Target capture with Angio353)
+
+Overview of the directory project structure:
+/Hawaii_Mascarenes_Asteraceae
+   /scripts
+   /data
+      /namelists
+         namelist_island.txt (new island+mainland samples with comp1061+angio353)
+         namelist_PAFTOL.txt (PAFTOL/GAP Asteraceae-wide samples with angio353 only)
+         namelist_islandPAFTOL.txt (combined sample list)
+         namelist_islandPAFTOL_filtered.txt (combined sample list filtered by recovery quality based on hybpiper summary)
+         PAFTOL_Asteraceae_accessions.tsv (PAFTOL accession ids)
+         PAFTOL_Asteraceae_sequences.xlsx (database of PAFTOL sequences downloaded)
+      /target_files
+         targets_comp1061.fasta (improved comp1061 only)
+         targets_mega353_asterales.fasta (improved angio353 asterales only)
+         targets_mega353_comp1061.fasta (improved comp1061 and angio353)
+      /0_raw_sequences
+         /Island
+         /PAFTOL
+      /1_trimmed
+         /paired
+         /unpaired
+      /2_Hybpiper
+      /2_Hybpiper_summary
+      /2_Hybpiper_sequences
+      /2_Hybpiper_paralogs
+      /3_Paralogy_resolution
+      /4_Alignments
+         /Hybpiper
+         /Paralogs
+         /Paragone
+            /PF
+            /MO
+            /RT
+      /5_Phylogeny_coalescent
+         /Hybpiper
+            /Gene_trees
+            /Species_tree
+         /Paralogs
+            /Gene_trees
+            /Species_tree
+         /Paragone
+            /Gene_trees
+               /PF
+               /MO
+               /RT
+            /Species_tree
+               /PF
+               /MO
+               /RT
+      /6_Phylogeny_ML
+         /Hybpiper
+            /Rooted_gene_trees
+            /SortaDate
+            /Phylogeny_ML
+         /Paragone-PF
+            /Rooted_gene_trees
+            /SortaDate
+            /Phylogeny_ML
+         /Paragone-MO
+            /Rooted_gene_trees
+            /SortaDate
+            /Phylogeny_ML
+      /7_Dated_Phylogeny
+         /Hybpiper
+         /Paragone-PF
+         /Paragone-MO
+         Asteraceae_fossil_database.xlsx
+
+================================================================================
+Preparation: Improving the target file
+
+Expanding and fixing the reference target file has been shown to be an important process in the read mapping step with Hybpiper (https://bsapubs.onlinelibrary.wiley.com/doi/10.1002/aps3.11420). Chris Jackson has expanded the angio353 target file (mega353) and developed some useful tools to improve/expand target files, check reading frame, check for stop codons, and remove low-complexity loci that significantly slow down the read mapping assembly. 
+
+Resources and references: 
+* https://github.com/mossmatters/HybPiper/wiki/Troubleshooting,-common-issues,-and-recommendations#14-fixing-and-filtering-your-target-file
+* https://github.com/mossmatters/HybPiper/wiki/Full-pipeline-parameters#70-hybpiper-check_targetfile
+* https://github.com/mossmatters/HybPiper/wiki/Full-pipeline-parameters#80-hybpiper-fix_targetfile
+
+Below is the code used to improve our target file. 
+This was run from /Target_file_improvement on the interactive node
+--------------------------------------------------------------------------------
+# Load modules
+module load HybPiper
+module load SciPy-bundle
+module load Biopython/1.79-foss-2022a
+module load HMMER
+module load MAFFT
+module load Exonerate
+
+# 1. Improve the 353 targets with the filtered mega353 target file 
+
+# First, download the NewTargets repository and unzip the mega353 fasta
+git clone https://github.com/chrisjackson-pellicle/NewTargets.git
+
+# Next make a select file to select for the Asterales targets (see github and select_file_example.txt)
+#Filter the mega353 script to add sequences from Asterales to the standard 353 target sequences
+python3 filter_mega353.py mega353.fasta select_Asterales.txt -filtered_target_file mega353_asterales.fasta -report_filename mega353_asterales_report.csv
+
+# 2. Check the target file (for low complexity regions)
+
+# mega353_asterales 
+hybpiper check_targetfile -t_dna mega353_asterales.fasta  
+## There are 57 sequences in your target file that contain unexpected stop codons when translated in the first forwards frame. [list printed to console]
+## There are 68 sequences in your target file that are not multiples of three. [list printed to console]
+##46 sequences with low complexity 
+
+# comp1061 
+hybpiper check_targetfile -t_dna comp1061_hybpiper_reference.fasta
+## There are 465 sequences in your target file that contain unexpected stop codons when translated in the first forwards frame.
+## There are 304 sequences in your target file that are not multiples of three.
+## 6 sequences with low complexity 
+
+# 3. Fix the target files
+
+# mega353_asterales 
+hybpiper fix_targetfile --targetfile_dna mega353_asterales.fasta fix_targetfile_2023-04-21-15_15_16.ctl --allow_gene_removal
+
+## comp1061 
+hybpiper fix_targetfile --targetfile_dna comp1061_hybpiper_reference.fasta fix_targetfile_2023-04-21-15_57_04.ctl --allow_gene_removal
+
+# 4. Combine the mega353_asterales_fixed.fasta with comp1061_fixed.fasta => targets_mega353_comp1061.fasta 
+
+cat comp1061_hybpiper_reference_fixed.fasta mega353_asterales_fixed.fasta > targets_mega353_comp1061.fasta
+
+================================================================================
+Preparation: Organizing and downloading sequence data
+
+We are combining sequences from two data sources: 
+1. Our new island+mainland samples that were sequenced with comp1061 and angio353
+2. PAFTOL/GAP sequences that include Calyceraceae outgroups, species from all tribes in Asteraceae, and species around our target lineages 
+
+In 0_raw_sequneces we have two subdirectories: 
+   /0_raw_sequneces/Island
+   /0_raw_sequneces/PAFTOL 
+
+The list of PAFTOL sequnces is detailed in /namelists/PAFTOL_Asteraceae_sequences.xlsx. We start by downloading the PAFTOL sequneces from the ENA sequence downloader (https://github.com/enasequence/ena-ftp-downloader/) into our woring project directory on Habrok. 
+
+The script does the following:
+1. Sets file paths for this project (update for future runs as needed)
+2. Runs the sequence downloader for the selected assessions (/namelists/PAFTOL_Asteraceae_accessions.tsv)
+   * Note! These need to be saves as a tsv file- no header, single column 
+3. Reorganize the sequences. Move R1 and R2 seqeunces out of the individual nested directories and into the PAFTOL directory
+4. Rename the sequneces based on the "Name" column in PAFTOL_Asteraceae_sequences.csv. This calls a python script (rename_PAFTOL_sequences.py) to execute the rename. The name is standardized to be Family_Subfamily_Tribe_Genus_species_ENAid_Read#
+
+Important note!! 
+This step requires manual inspection. Some species (8/176 in this case) do not have a valid format=READS_FASTQ
+So after the bulk download run ls -1 | grep '.gz' | wc -l to see how many samples didnt download. 
+Then manually identify samples missing/not downloaded, go to the ENA or PAFTOL portal to manually download/upload to habrok, and manually rename. 
+(I have trialed automating this step and its not worth the effort...easier to just manually deal with these species)
+
+form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/0_raw_sequences/PAFTOL run:
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/PAFTOL_download.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=05:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=10GB
+#SBATCH --job-name=PAFTOL_download
+
+# Aim: Download selected PAFTOL/GAP Asteraceae 
+# ENA sequence downloader info: https://github.com/enasequence/ena-ftp-downloader/
+
+# 1. Set file paths
+JAR_PATH="/home4/$USER/software/ENA/ena-file-downloader.jar"
+ACCESSIONS_PATH="/scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/namelists/PAFTOL_Asteraceae_accessions.tsv"
+OUTPUT_LOCATION="/scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/0_raw_sequences/PAFTOL/"
+SEQ_NAMES="/scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/namelists/PAFTOL_Asteraceae_sequences.csv"
+SCRIPT_PATH="/scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/rename_PAFTOL_sequences.py"
+
+# 2. Run the downloader
+#reads_fastq
+java -jar $JAR_PATH \
+  --accessions=$ACCESSIONS_PATH \
+  --format=READS_FASTQ \
+  --location=$OUTPUT_LOCATION \
+  --protocol=FTP \
+  --asperaLocation=null
+
+# 3. Reorganize the sequences 
+
+#reads_fastq
+
+# Move all *.fastq.gz files from subdirectories to the target directory
+find "${OUTPUT_LOCATION}/reads_fastq" -type f -name "*.fastq.gz" -exec mv {} "${OUTPUT_LOCATION}" \;
+# Remove empty accession directories
+find "${OUTPUT_LOCATION}/reads_fastq" -type d -empty -delete
+
+# 4. Rename the PAFTOL sequences using Python script
+
+python3 "$SCRIPT_PATH" "$OUTPUT_LOCATION" "$SEQ_NAMES"
+
+--------------------------------------------------------------------------------
+/scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/rename_PAFTOL_sequences.py
+--------------------------------------------------------------------------------
+import csv
+import os
+import sys
+
+# Define function to read CSV and rename files
+def rename_sequences(output_location, seq_names):
+    # Read CSV and rename files
+    with open(seq_names, 'r') as csvfile:
+        reader = csv.DictReader(csvfile)
+        for row in reader:
+            accession_id = row['Run Accession Number']
+            name = row['Name']
+
+            if accession_id and name:
+                # Rename forward read
+                old_name_1 = f"{accession_id}_1.fastq.gz"
+                new_name_1 = f"{name}_1.fastq.gz"
+                if os.path.exists(os.path.join(output_location, old_name_1)):
+                    os.rename(os.path.join(output_location, old_name_1), os.path.join(output_location, new_name_1))
+                    print(f"Renamed {old_name_1} to {new_name_1}")
+                else:
+                    print(f"Warning: {old_name_1} not found.")
+
+                # Rename reverse read
+                old_name_2 = f"{accession_id}_2.fastq.gz"
+                new_name_2 = f"{name}_2.fastq.gz"
+                if os.path.exists(os.path.join(output_location, old_name_2)):
+                    os.rename(os.path.join(output_location, old_name_2), os.path.join(output_location, new_name_2))
+                    print(f"Renamed {old_name_2} to {new_name_2}")
+                else:
+                    print(f"Warning: {old_name_2} not found.")
+
+# Main function to handle command-line arguments
+def main():
+    if len(sys.argv) != 3:
+        print("Usage: python3 rename_sequences.py <OUTPUT_LOCATION> <SEQ_NAMES>")
+        sys.exit(1)
+
+    output_location = sys.argv[1]
+    seq_names = sys.argv[2]
+
+    rename_sequences(output_location, seq_names)
+
+if __name__ == "__main__":
+    main()
+
+================================================================================
+Step 1: Trim and clean the reads
+
+We will run a trimming script for the island and PAFTOL samples seperately, detailed below. 
+
+--------------------------------------------------------------------------------
+# Island dataset
+
+A few things are happening in this script:
+* making a new 1_trimmed directory 
+* copying the raw files to the trimmed folder to do the work there
+* change the file ending, I want to end up with *R1/2.fastq.gz so I need to remove everything until that
+* unzip the files
+* run trimmomatic on each sample
+* organize the resulting samples: move sequences into paired and unpaired directories, and make a new dir for the unzipped sequences for reference
+
+Code tips: 
+* to check the unique file endings for the raw sequences, use: find . -type f -name '*_001_*.fastq.gz' | awk -F"_001_" '{print $2}' | sort -u
+
+Note on sample rename: 
+* samples Faujasiopsis_boivinii_Mauritius_L1009_GHIL-Swap and Psiadia_amygdalina_Reunion_L996_GHIL-Swap had the tube lables wiped off during lab work
+* sample L996 was repeated so we could test if our tube rename was right
+* when building the Mascarenes Senecioneae phylo we realized the names need to be swapped, so we manually rename:
+   * Faujasiopsis_boivinii_Mauritius_L1009_GHIL-Swap = Psiadia_amygdalina_Reunion_L996_GHIL_SwapCN 
+   * Psiadia_amygdalina_Reunion_L996_GHIL-Swap = Faujasiopsis_boivinii_Mauritius_L1009_GHIL_SwapCN
+
+form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/0_raw_sequences/Island run:
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/trim_island.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=2-00:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=6GB
+#SBATCH --job-name=trimmomatic_Hawaii_Mascarenes_Asteraceae_island
+
+# Start: Run this from the 0_raw_sequences/Island directory
+
+# Copy all the files into the trimmed reads directory
+mkdir -p ../../1_trimmed/
+cp *.filt.fastq.gz ../../1_trimmed/
+
+# move into the trimmed reads directory
+cd ../../1_trimmed/
+
+# remove the filter extension (.filt.)
+rename _001_AHGTCYDMXY.filt.fastq.gz .fastq.gz *_001_AHGTCYDMXY.filt.fastq.gz
+rename _001_AHNC5FDSX7.filt.fastq.gz .fastq.gz *_001_AHNC5FDSX7.filt.fastq.gz
+rename _001_AHNNH2DMXY.filt.fastq.gz .fastq.gz *_001_AHNNH2DMXY.filt.fastq.gz
+rename _001_AHWGF5DSX7.filt.fastq.gz .fastq.gz *_001_AHWGF5DSX7.filt.fastq.gz
+rename _001_BHT35KDRX2.filt.fastq.gz .fastq.gz *_001_BHT35KDRX2.filt.fastq.gz
+rename _001_BHW5NHDSX7.filt.fastq.gz .fastq.gz *_001_BHW5NHDSX7.filt.fastq.gz
+rename _001_BHWGWCDSX7.filt.fastq.gz .fastq.gz *_001_BHWGWCDSX7.filt.fastq.gz
+# This is updated to the run specific file name, but generalized command:
+# rename .filt.fastq.gz .fastq.gz *.filt.fastq.gz
+
+# unzip the zipped sequence files
+for zip in *.fastq.gz; do
+    gunzip "$zip"
+done
+
+# Create paired and unpaired directories
+mkdir -p paired unpaired
+
+# load trimmomatic
+module load Trimmomatic
+
+# run trimmomatic
+Total=$(ls *_R1.fastq | wc -l)
+
+for i in $(eval echo {1..$Total}); do
+    seq1=$(ls *_R1.fastq | head -n $i | tail -1)
+    seq2=$(echo $seq1 | sed 's/_R1/_R2/g')
+    name=$(basename $seq1 _R1.fastq)
+    
+    java -jar $EBROOTTRIMMOMATIC/trimmomatic-0.39.jar PE -threads 4 -trimlog Trimlog.txt $seq1 $seq2 \
+        ${name}_1P.fastq ${name}_1U.fastq \
+        ${name}_2P.fastq ${name}_2U.fastq \
+        ILLUMINACLIP:$EBROOTTRIMMOMATIC/adapters/TruSeq3-PE-2.fa:2:30:10:2:true LEADING:10 TRAILING:10 SLIDINGWINDOW:4:20 MINLEN:40
+
+    # Move the trimmed files to the appropriate folders
+    mv ${name}_1P.fastq paired/
+    mv ${name}_2P.fastq paired/
+    mv ${name}_1U.fastq unpaired/
+    mv ${name}_2U.fastq unpaired/
+
+    # Delete unnecessary files to free up storage space
+    rm ${name}_R*.fastq
+done
+
+--------------------------------------------------------------------------------
+# PAFTOL dataset
+
+form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/0_raw_sequences/PAFTOL run:
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/trim_PAFTOL.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=2-00:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=6GB
+#SBATCH --job-name=trimmomatic_Hawaii_Mascarenes_Asteraceae_PAFTOL
+
+# Start: Run this from the 0_raw_sequences/PAFTOL directory
+
+# Copy all the files into the trimmed reads directory
+mkdir -p ../../1_trimmed/
+cp *.fastq.gz ../../1_trimmed/
+
+# move into the trimmed reads directory
+cd ../../1_trimmed/
+
+# unzip the zipped sequence files
+for zip in *.fastq.gz; do
+    gunzip "$zip"
+done
+
+# Create paired and unpaired directories (if do not already exist)
+mkdir -p paired unpaired
+
+# load trimmomatic
+module load Trimmomatic
+
+# run trimmomatic
+# note PAFTOL differ from island: Island = _R1 and R2 | PAFTOL = _1 and _2
+Total=$(ls *_1.fastq | wc -l)
+
+for i in $(eval echo {1..$Total}); do
+    seq1=$(ls *_1.fastq | head -n $i | tail -1)
+    seq2=$(echo $seq1 | sed 's/_1/_2/g')
+    name=$(basename $seq1 _1.fastq)
+    
+    java -jar $EBROOTTRIMMOMATIC/trimmomatic-0.39.jar PE -threads 4 -trimlog Trimlog.txt $seq1 $seq2 \
+        ${name}_1P.fastq ${name}_1U.fastq \
+        ${name}_2P.fastq ${name}_2U.fastq \
+        ILLUMINACLIP:$EBROOTTRIMMOMATIC/adapters/TruSeq3-PE-2.fa:2:30:10:2:true LEADING:10 TRAILING:10 SLIDINGWINDOW:4:20 MINLEN:40
+
+    # Move the trimmed files to the appropriate folders
+    mv ${name}_1P.fastq paired/
+    mv ${name}_2P.fastq paired/
+    mv ${name}_1U.fastq unpaired/
+    mv ${name}_2U.fastq unpaired/
+
+    # Delete unnecessary files to free up storage space
+    rm ${name}_*.fastq
+done
+
+================================================================================
+Step 2a: Run hybpiper
+
+Resources and references:
+* https://github.com/mossmatters/HybPiper/wiki/
+* https://bsapubs.onlinelibrary.wiley.com/doi/10.3732/apps.1600016
+* https://github.com/sidonieB/bioinfo-utils/blob/master/docs/advice/target_capture_data_analysis.md
+
+Run Hybpiper assemble for the two different datasets (island and PAFTOL) seperately due to the different bait kits/target files. Select samples for the datasets based on the namelist file and be sure to use the correct target file.
+
+Code tip: To create the namelist.txt from the trimmed paired reads directory, run the following:
+* ls *_1P.fastq *_2P.fastq | awk -F"_[12]P.fastq" '{print $1}' | sort -u > ../../namelist.txt
+
+Notes on run: 
+Island dataset
+* wall time for 265 samples approx 1d10h
+PAFTOL dataset
+* wall time for 176 samples approx 1d13h
+
+--------------------------------------------------------------------------------
+# Island dataset
+
+form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/2_Hybpiper run:
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/hybpiper_assemble_islands.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+#SBATCH --job-name=HybPiper_assemble_Hawaii_Mascarenes_Island
+#SBATCH --time=5-00:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=2
+#SBATCH --mem=30GB
+#SBATCH --output=HybP_%A_%a.out
+#SBATCH --error=HybP_%A_%a.error
+#SBATCH --array=1-265
+ulimit -n 16384
+
+# Remember to specify the array range to match the number of samples/namelist
+# Remember to update the path to the correct name list
+# Remember to specify the correct target file
+
+# Run this script from the 2_Hybpiper folder
+
+# load HybPiper2 module
+module load MAFFT
+module load Hybpiper/2.1.6-foss-2022b
+
+# run HybPiper 
+# note: can also run from cd $TMPDIR but it takes longer because of the speed for reading/writing directories to disk
+cd /dev/shm/
+
+#Use the array's index to read the file with names into the $samplename variable
+samplename=$(sed -n "$SLURM_ARRAY_TASK_ID"p /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/namelists/namelist_island.txt)
+
+hybpiper assemble \
+   -r "/scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/1_trimmed/paired/${samplename}_1P.fastq" \
+   "/scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/1_trimmed/paired/${samplename}_2P.fastq" \
+   -t_dna /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/target_files/targets_mega353_comp1061.fasta \
+   --prefix $samplename \
+   --cpu $SLURM_TASKS_PER_NODE
+python $HOME/software/HybPiper/cleanup.py $samplename
+# cp -r $samplename /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/2_Hybpiper/$samplename
+# zip the files before copying to /scratch to stay within resources quoata
+tar cf /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/2_Hybpiper/$samplename.tar $samplename
+rm -r $samplename
+
+# Note: set the hybpiper cpu flag to use the number of tasks reported by Slurm for the job as a parameter. This prevents OOM errors
+
+--------------------------------------------------------------------------------
+# Island dataset
+
+form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/2_Hybpiper run:
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/hybpiper_assemble_PAFTOL.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+#SBATCH --job-name=HybPiper_assemble_Hawaii_Mascarenes_PAFTOL
+#SBATCH --time=5-00:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=2
+#SBATCH --mem=30GB
+#SBATCH --output=HybP_%A_%a.out
+#SBATCH --error=HybP_%A_%a.error
+#SBATCH --array=1-176
+ulimit -n 16384
+
+# Remember to specify the array range to match the number of samples/namelist
+# Remember to update the path to the correct name list
+# Remember to specify the correct target file
+
+# Run this script from the 2_Hybpiper folder
+
+# load HybPiper2 module
+module load MAFFT
+module load Hybpiper/2.1.6-foss-2022b
+
+# run HybPiper 
+# note: can also run from cd $TMPDIR but it takes longer because of the speed for reading/writing directories to disk
+cd /dev/shm/
+
+#Use the array's index to read the file with names into the $samplename variable
+samplename=$(sed -n "$SLURM_ARRAY_TASK_ID"p /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/namelists/namelist_PAFTOL.txt)
+
+hybpiper assemble \
+   -r "/scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/1_trimmed/paired/${samplename}_1P.fastq" \
+   "/scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/1_trimmed/paired/${samplename}_2P.fastq" \
+   -t_dna /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/target_files/targets_mega353_asterales.fasta \
+   --prefix $samplename \
+   --cpu $SLURM_TASKS_PER_NODE
+python $HOME/software/HybPiper/cleanup.py $samplename
+# cp -r $samplename /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/2_Hybpiper/$samplename
+# zip the files before copying to /scratch to stay within resources quoata
+tar cf /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/2_Hybpiper/$samplename.tar $samplename
+rm -r $samplename
+
+# Note: set the hybpiper cpu flag to use the number of tasks reported by Slurm for the job as a parameter. This prevents OOM errors
+
+================================================================================
+Step 2b: Get summary stats from Hybpiper 
+
+For each of the sequence datasets (1.island, 2.PAFTOL, 3.island+PAFTOL) get summary stats pre-filtering.
+
+Breakdown of the script:
+* datadir=$PWD stores the location to the Hybpiper data (so run this script from the 2_Hybpiper directory)
+* Change current working directory to local disk ($TMPDIR) in compute node for faster processing  
+* For loop to extract Hybpiper tar files to $TMPDIR. 
+   * First line in loop interates of all the .tar files in the "datadir" directory (ie 2_Hybpiper)
+   * "tar xf $datadir/$samplename.tar" extracts the contents of the .tar file specified by $samplename to the current working directory ($TMPDIR)
+* Then we get the summary stats. 
+   * hybpiper stats command will then summarize target enrichment and gene recovery efficiency for a set of samples
+      * We need to supply the reference file used for mapping the reads. The file is located in the target_files directory, which is one level up from the current datadir directory.
+      * And specify the path to the namelist.txt file that contains the names of the samples. The file is located in the directory one level up from datadir.
+   * hybpiper recovery_heatmap takes the sequence length table output of hybpiper stats and creates a figure to visualize the recovery efficiency. 
+   * Then copy the summary results back to /scratch in a new directory called 2_Hybpiper_summary
+
+Resources and references:
+* https://github.com/mossmatters/HybPiper/wiki#hybpiper-stats
+
+form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/2_Hybpiper run:
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/hybpiper_summary_stats.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=2-00:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=20GB
+#SBATCH --job-name=hybpiper_summary_stats_all
+ulimit -n 16384
+
+# Run this script from the 2_Hybpiper folder
+
+# Store location of data
+datadir=$PWD
+
+# load HybPiper2 module
+module load MAFFT
+module load Hybpiper/2.1.6-foss-2022b
+
+# Change to local disk in compute node for faster processing
+cd $TMPDIR
+
+# Extract tar files to $TMPDIR
+for samplename in $datadir/*.tar; do
+  tar xf $samplename
+done
+
+# 1. Summary stats: Island
+
+# hybpiper stats command will then summarize target enrichment and gene recovery efficiency for a set of samples. We just need to supply the target file and namelist.
+hybpiper stats -t_dna $datadir/../target_files/targets_mega353_comp1061.fasta gene $datadir/../namelists/namelist_island.txt --seq_lengths_filename seq_lengths_island --stats_filename hybpiper_stats_island
+
+# This command takes the sequence length table output of hybpiper stats and creates a figure to visualize the recovery efficiency.
+hybpiper recovery_heatmap seq_lengths_island.tsv --figure_length 40 --figure_height 15 --heatmap_filename recovery_heatmap_island --heatmap_filetype pdf
+# Note! Because there are so many loci with the angio353+comp1061, we need to set the figure dimensions for the plot to be produced.
+
+# copy back the results 
+cp *.pdf *.tsv $datadir/../2_Hybpiper_summary
+
+
+# 2. Summary stats: PAFTOL
+
+# hybpiper stats command will then summarize target enrichment and gene recovery efficiency for a set of samples. We just need to supply the target file and namelist.
+hybpiper stats -t_dna $datadir/../target_files/targets_mega353_asterales.fasta gene $datadir/../namelists/namelist_PAFTOL.txt --seq_lengths_filename seq_lengths_PAFTOL --stats_filename hybpiper_stats_PAFTOL
+
+# This command takes the sequence length table output of hybpiper stats and creates a figure to visualize the recovery efficiency.
+hybpiper recovery_heatmap seq_lengths_PAFTOL.tsv --figure_length 40 --figure_height 15 --heatmap_filename recovery_heatmap_PAFTOL --heatmap_filetype pdf
+# Note! Because there are so many loci with the angio353+comp1061, we need to set the figure dimensions for the plot to be produced.
+
+# copy back the results 
+cp *.pdf *.tsv $datadir/../2_Hybpiper_summary
+
+
+# 3. Summary stats: Island + PAFTOL 
+
+# hybpiper stats command will then summarize target enrichment and gene recovery efficiency for a set of samples. We just need to supply the target file and namelist.
+hybpiper stats -t_dna $datadir/../target_files/targets_mega353_asterales.fasta gene $datadir/../namelists/namelist_islandPAFTOL.txt --seq_lengths_filename seq_lengths_islandPAFTOL --stats_filename hybpiper_stats_islandPAFTOL
+
+# This command takes the sequence length table output of hybpiper stats and creates a figure to visualize the recovery efficiency.
+hybpiper recovery_heatmap seq_lengths_islandPAFTOL.tsv --figure_length 40 --figure_height 15 --heatmap_filename recovery_heatmap_islandPAFTOL --heatmap_filetype pdf
+# Note! Because there are so many loci with the angio353+comp1061, we need to set the figure dimensions for the plot to be produced.
+
+# copy back the results 
+cp *.pdf *.tsv $datadir/../2_Hybpiper_summary
+
+--------------------------------------------------------------------------------
+Review the sequence capture success: 
+
+1. Recovery of island samples with comp1061+angio353
+
+Very Low Recovery (<5 loci at 75pct)
+11 Samples had very low recovery (>5 loci at 75pct). 
+* Adenostemma_viscosum_Mauritius_L1132_K
+* Pseudognaphalium_sandwicensium_Molokai_L1120_D
+* Psiadia_rivalsii_Reunion_L999_R
+* Eriotrix_commersonii_Reunion_L1271_J
+* Hubertia_alleizettei_Madagascar_L1260_K
+* Humbertacalia_amplexifolia_Madagascar_L1258_K
+* Keysseria_pinguiculiformis_NewGuinea_L1077_D
+* Stoebe_cryptophylla_Madagascar_L1024_GHIL
+* Humbertacalia_tomentosa_Reunion_L1247_K
+* Launaea_sarmentosa_Continent_L1013_GHIL
+
+Note several of these samples are key and we should try to recover enough material to include. 
+Ideas: Mapping at 50pct? Further improving the reference file? 
+Priorities are:
+* Psiadia_rivalsii_Reunion_L999_R
+* Eriotrix_commersonii_Reunion_L1271_J
+* Hubertia_alleizettei_Madagascar_L1260_K
+* Humbertacalia_amplexifolia_Madagascar_L1258_K
+* Keysseria_pinguiculiformis_NewGuinea_L1077_D
+* Humbertacalia_tomentosa_Reunion_L1247_K
+* Stoebe_cryptophylla_Madagascar_L1024_GHIL
+
+Low Recovery (<100 loci at 75pct)
+* Adenostemma_mauritianum_Madagascar_L1012_K
+* Hubertia_leucanthothamnus_Madagascar_L1249_GHIL
+* Hubertia_heimii_Madagascar_L1257_K
+* Launaea_sarmentosa_Continent_L1013_K
+* Eriotrix_commersonnii_Reunion_L967_GHIL
+* Keysseria_tomentella_NewGuinea_L1084_E
+* Epaltes_divaricata_Sumatra_L1224_GHIL
+* Keysseria_radicans_Sulawesi_L1078_D
+* Keysseria_bellidiformis_NewGuinea_L1073_GHIL
+* Distephanus_cloiselii_Madagascar_L1243_GHIL
+* Keysseria_bellidiformis_NewGuinea_L1073_D
+* Hubertia_ivohibeensis_Madagascar_L1269_GHIL
+* Hubertia_foliatilis_Mayotte_L1264_GHIL
+* Tetramolopium_conyzoides_Molokai_L1272_K
+* Keysseria_tomentella_NewGuinea_L1084_GHIL
+* Keysseria_fasciculata_NewGuinea_L1074_E
+
+Problematic sample (unexpected placement after initial tree)
+Removed from analysis:
+* Pseudognaphalium_sandwicensium_Molokai_L1138_A
+
+2. Mapping of PAFTOL samples with angio353
+
+Very Low Recovery (<5 loci at 75)
+* Mutisioideae_Nassauvieae_Holocheilus_hieracioides_ERR7618384
+* Asteroideae_Perityleae_Lycapsus_tenuifolius_ERR7621297
+
+Low Recovery (<15 loci at 75pct)
+* Barnadesioideae_Barnadesieae_Doniophyton_anomalum_ERR7618368
+* Asteroideae_Astereae_Welwitschiella_neriifolia_ERR7621256
+
+3. Mapping of island+PAFTOL sample with angio353
+
+Very Low Recovery (<5 loci at 75)
+* Adenostemma_mauritianum_Madagascar_L1012_K
+* Adenostemma_viscosum_Mauritius_L1132_K
+* Distephanus_cloiselii_Madagascar_L1243_GHIL
+* Keysseria_bellidiformis_NewGuinea_L1073_D
+* Keysseria_pinguiculiformis_NewGuinea_L1077_D
+* Keysseria_radicans_Sulawesi_L1078_D
+* Keysseria_tomentella_NewGuinea_L1084_E
+* Launaea_sarmentosa_Continent_L1013_GHIL
+* Pseudognaphalium_sandwicensium_Molokai_L1120_D
+* Psiadia_rivalsii_Reunion_L999_R
+* Stoebe_cryptophylla_Madagascar_L1024_GHIL
+* Stoebe_cryptophylla_Madagascar_L1024_K
+* Eriotrix_commersonii_Reunion_L1271_J
+* Eriotrix_commersonnii_Reunion_L967_GHIL
+* Hubertia_alleizettei_Madagascar_L1260_K
+* Hubertia_foliatilis_Mayotte_L1264_GHIL
+* Humbertacalia_amplexifolia_Madagascar_L1258_K
+* Humbertacalia_tomentosa_Reunion_L1247_K
+* Mutisioideae_Nassauvieae_Holocheilus_hieracioides_ERR7618384
+* Keysseria_bellidiformis_NewGuinea_L1073_GHIL
+* Hubertia_heimii_Madagascar_L1257_K
+* Hubertia_leucanthothamnus_Madagascar_L1249_GHIL
+* Asteroideae_Perityleae_Lycapsus_tenuifolius_ERR7621297
+* Epaltes_divaricata_Sumatra_L1224_GHIL
+* Launaea_sarmentosa_Continent_L1013_K
+* Hubertia_ivohibeensis_Madagascar_L1269_GHIL
+
+Low Recovery (<15 loci at 75pct)
+* Keysseria_tomentella_NewGuinea_L1084_GHIL
+* Barnadesioideae_Barnadesieae_Doniophyton_anomalum_ERR7618368
+* Keysseria_maviensis_Maui_L1124_E
+* Tetramolopium_conyzoides_Molokai_L1272_K
+* Monarrhenus_salicifolius_Mauritius_L989_K
+* Humbertacalia_leucopappa_Madagascar_L1250_GHIL
+* Keysseria_fasciculata_NewGuinea_L1074_E
+* Keysseria_fasciculata_NewGuinea_L1074_GHIL
+* Asteroideae_Astereae_Welwitschiella_neriifolia_ERR7621256
+
+!Filtered Dataset!
+From previous sensitivity tests on the effect of missing data (ie low loci recovery) on sample phylogenetic placement, we see that removing smaples with low recovery is necessary. However, there is no easy or clear threshold. So we set the threshold below cautiously but also with an understanding of our dataset through previous sensitivity runs. 
+For our filtered dataset (ie the samples we will bring forward) we set a threshold of at least 15 loci at 75. 
+
+List of samples filtered out here:
+* Pseudognaphalium_sandwicensium_Molokai_L1138_A 
+* Adenostemma_mauritianum_Madagascar_L1012_K
+* Adenostemma_viscosum_Mauritius_L1132_K
+* Distephanus_cloiselii_Madagascar_L1243_GHIL
+* Keysseria_bellidiformis_NewGuinea_L1073_D
+* Keysseria_pinguiculiformis_NewGuinea_L1077_D
+* Keysseria_radicans_Sulawesi_L1078_D
+* Keysseria_tomentella_NewGuinea_L1084_E
+* Launaea_sarmentosa_Continent_L1013_GHIL
+* Pseudognaphalium_sandwicensium_Molokai_L1120_D
+* Psiadia_rivalsii_Reunion_L999_R
+* Stoebe_cryptophylla_Madagascar_L1024_GHIL
+* Stoebe_cryptophylla_Madagascar_L1024_K
+* Eriotrix_commersonii_Reunion_L1271_J
+* Eriotrix_commersonnii_Reunion_L967_GHIL
+* Hubertia_alleizettei_Madagascar_L1260_K
+* Hubertia_foliatilis_Mayotte_L1264_GHIL
+* Humbertacalia_amplexifolia_Madagascar_L1258_K
+* Humbertacalia_tomentosa_Reunion_L1247_K
+* Mutisioideae_Nassauvieae_Holocheilus_hieracioides_ERR7618384
+* Keysseria_bellidiformis_NewGuinea_L1073_GHIL
+* Hubertia_heimii_Madagascar_L1257_K
+* Hubertia_leucanthothamnus_Madagascar_L1249_GHIL
+* Asteroideae_Perityleae_Lycapsus_tenuifolius_ERR7621297
+* Epaltes_divaricata_Sumatra_L1224_GHIL
+* Launaea_sarmentosa_Continent_L1013_K
+* Hubertia_ivohibeensis_Madagascar_L1269_GHIL
+* Keysseria_tomentella_NewGuinea_L1084_GHIL
+* Barnadesioideae_Barnadesieae_Doniophyton_anomalum_ERR7618368
+* Keysseria_maviensis_Maui_L1124_E
+
+There are a few exceptions that are <15 loci, but crucial samples that we bring forward as well. These include: 
+* Tetramolopium_conyzoides_Molokai_L1272_K
+* Keysseria_fasciculata_NewGuinea_L1074_GHIL
+
+Update the namelist_islandPAFTOL.txt to namelist_islandPAFTOL_filtered.txt 
+
+Rerun the Hybpiper summary stats to get tables and report for the final samples
+
+form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/2_Hybpiper run:
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/hybpiper_summary_stats_filtered.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=2-00:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=20GB
+#SBATCH --job-name=hybpiper_summary_stats_filtered
+ulimit -n 16384
+
+# Run this script from the 2_Hybpiper folder
+
+# Store location of data
+datadir=$PWD
+
+# load HybPiper2 module
+module load MAFFT
+module load Hybpiper/2.1.6-foss-2022b
+
+# Change to local disk in compute node for faster processing
+cd $TMPDIR
+
+# Extract tar files to $TMPDIR
+for samplename in $datadir/*.tar; do
+  tar xf $samplename
+done
+
+# Summary stats: Island + PAFTOL filtered
+
+# hybpiper stats command will then summarize target enrichment and gene recovery efficiency for a set of samples. We just need to supply the target file and namelist.
+hybpiper stats -t_dna $datadir/../target_files/targets_mega353_asterales.fasta gene $datadir/../namelists/namelist_islandPAFTOL_filtered.txt --seq_lengths_filename seq_lengths_islandPAFTOL_filtered --stats_filename hybpiper_stats_islandPAFTOL_filtered
+
+# This command takes the sequence length table output of hybpiper stats and creates a figure to visualize the recovery efficiency.
+hybpiper recovery_heatmap seq_lengths_islandPAFTOL_filtered.tsv --heatmap_filename recovery_heatmap_islandPAFTOL_filtered --heatmap_filetype pdf
+
+# copy back the results 
+cp *.pdf *.tsv $datadir/../2_Hybpiper_summary
+
+================================================================================
+Step 2c: Retrieve Hybpiper sequences + Paralogs
+
+Breakdown of the script:
+* datadir=$PWD stores the location to the Hybpiper data (so run this script from the 2_Hybpiper directory)
+* Change current working directory to local disk ($TMPDIR) in compute node for faster processing  
+* For loop to extract Hybpiper tar files to $TMPDIR. 
+   * First line in loop interates of all the .tar files in the "datadir" directory (ie 2_Hybpiper)
+   * "tar xf $datadir/$samplename.tar" extracts the contents of the .tar file specified by $samplename to the current working directory ($TMPDIR)
+* The first main action of this script is to retrieve the sequences and store the .FNA files in a new directory called 2_Hybpiper_sequences 
+* Second, we want to retrieve the paralogs:
+   * Run hybpiper paralog_retriever 
+   * Copy all the paralog output files to 2_Hybpiper_paralogs 
+
+Resources and references:
+* https://github.com/mossmatters/HybPiper/wiki#hybpiper-retrieve_sequences
+* https://github.com/mossmatters/HybPiper/wiki/Paralogs
+
+form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/2_Hybpiper run:
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/hybpiper_sequences_paralogs.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=2-00:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=20GB
+#SBATCH --job-name=hybpiper_retrieve_sequences_paralogs
+ulimit -n 16384
+
+# Run this script from the 2_Hybpiper folder
+
+# Store location of data
+datadir=$PWD
+
+# load HybPiper2 module
+module load MAFFT
+module load Hybpiper/2.1.6-foss-2022b
+
+# Change to local disk in compute node for faster processing
+cd $TMPDIR
+
+# Extract tar files to $TMPDIR
+for samplename in $datadir/*.tar; do
+  tar xf $samplename
+done
+
+# Retrieve sequences 
+
+# make the directory for the sequence outputs
+# -p flag creates a directory if doesnt exist, ignores if does
+mkdir -p $datadir/../2_Hybpiper_sequences
+
+# This command will get sequences recovered for the same gene from multiple samples and generates an unaligned multi-FASTA file for each gene.
+hybpiper retrieve_sequences dna -t_dna $datadir/../target_files/targets_mega353_asterales.fasta --sample_names $datadir/../namelists/namelist_islandPAFTOL_filtered.txt --fasta_dir $datadir/../2_Hybpiper_sequences
+# Note! Use the namelist_islandPAFTOL_filtered.txt based on review of summary stats
+
+# Recover paralogs 
+
+# Recover the coding sequences from alternative long paralogs 
+hybpiper paralog_retriever $datadir/../namelists/namelist_islandPAFTOL_filtered.txt -t_dna $datadir/../target_files/targets_mega353_asterales.fasta
+
+# Outputs include:
+# (1) a report that tabulates the number of sequences for each gene and sample (i.e. potential paralogs if > 1) 
+# (2) heatmap visualisation
+# (3) paralogs above threshold report
+# (4) folder containing paralogs (5) directory containing paralogs with putative chimeras removed
+
+# Copy all the paralog outputs back to the project directory in /scratch
+mkdir -p $datadir/../2_Hybpiper_paralogs 
+
+cp paralog_report.tsv $datadir/../2_Hybpiper_paralogs
+cp paralog_heatmap.png $datadir/../2_Hybpiper_paralogs
+cp paralogs_above_threshold_report.txt $datadir/../2_Hybpiper_paralogs
+cp -r paralogs_no_chimeras/ $datadir/../2_Hybpiper_paralogs
+cp -r paralogs_all/ $datadir/../2_Hybpiper_paralogs 
+
+================================================================================
+Step 2d: clean up sequence names
+
+Hybpiper2 appends information about the contigs (paralogs, depth) to the sample name in the multifasta files,
+This information can be leveraged in useful ways (ie Paragone). 
+However, when taking Hybpiper sequences forward on their own, we need to clean the names.
+This script changes in the sample names in the .FNA files by calling Qin´s python rename script. 
+So be sure the py script is in the script directory. 
+
+form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/2_Hybpiper_sequences run:
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/hybpiper_sequences_namesclean.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=12:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=15GB
+#SBATCH --job-name=Hybpiper_sequences_rename
+
+# Run this from 2_Hybpiper_sequences
+
+# This script deals with the downstream problem of Hybpiper adding extra info to the sample names within each .FNA files
+# We call Qin's renaming python script and save the .FNA files with the cleaned names in /2_Hybpiper_sequences subfolder /2_Hybpiper_sequences/Hybpiper_sequences_namesclean
+
+module load Python/3.9.6-GCCcore-11.2.0
+
+# make names clean directory
+mkdir -p Hybpiper_sequences_namesclean
+
+# run name cleaning script
+for file in $(ls *.FNA); 
+do python3 /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/rename_fastafile.py $file Hybpiper_sequences_namesclean/$file; 
+done
+
+================================================================================
+Step 3. Paralogy resolution (Paragone)
+
+ParaGone is a Python package (with external dependencies) designed to identify ortholog groups from a set of paralog sequences from multiple taxa. This process has been decribed as both paralogy resolution and orthology inference. ParaGone implements multiple different algorithms to infer ortholog groups. These algorithms are applied to gene trees that contain paralogs, and ortholog groups are inferred based on algorithm-specific parsing of the tree topologies. The pipeline uses algorithms described and implemented by Yang and Smith 2014. These approaches have since been adapted for target capture datasets. (from github)
+
+Resources and references:
+* https://github.com/chrisjackson-pellicle/ParaGone
+* https://github.com/chrisjackson-pellicle/ParaGone/wiki/Tutorial
+* https://github.com/chrisjackson-pellicle/ParaGone/wiki
+* https://academic.oup.com/mbe/article/31/11/3081/2925722
+
+--------------------------------------------------------------------------------
+Step 3a. Install Paragone on Habrok 
+
+# from software directory on home create a new conda environment
+cd /home4/$USER/software
+module load Miniconda3/22.11.1-1
+conda create --name paragone
+
+# add conda channels 
+conda config --add channels defaults
+conda config --add channels bioconda
+conda config --add channels conda-forge
+
+# activate environment and install paragone 
+conda activate paragone
+conda install -c chrisjackson-pellicle paragone
+
+# check the install
+paragone --help
+
+# to load the paragone environment (for future use)
+module load Anaconda3/2023.03-1
+conda activate paragone
+# deactivate conda environment
+conda deactivate
+
+================================================================================
+Step 3b. Run Paragone 
+
+Runs Paragone in a single command. Uses IQtree to build trees.
+
+mkdir 3_Paralogy_resolution in Hawaii_Mascarenes_Asteraceae/data/
+
+Run notes: 
+* Run time = 23hrs for c. 400 samples wiht 353 loci
+* Remove flag --keep_intermediate_files, to NOT keep intermediate files (incase quota limits on habrok)
+
+form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/3_Paralogy_resolution run:
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/paragone.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+#SBATCH --job-name=ParaGone
+#SBATCH --time=6-12:00:00
+#SBATCH --mem=25GB
+#SBATCH --cpus-per-task=10 
+
+# Run this script from the 3_Paralogy_resolution folder
+
+#Prepare the input data: make directory, copy outputs of Hybpiper paralog retriever (2_Hybpiper_paralogs/paralogs_all) to paragone inputs, remove any loci that have no reads
+mkdir paralog_input
+cp -r ../2_Hybpiper_paralogs/paralogs_all/. paralog_input
+find paralog_input/. -type f -size 0b -delete
+
+# Activate paragone conda environemt 
+module load Anaconda3/2023.03-1
+conda activate paragone
+
+# Run the full Paragone pipeline with a single command:
+paragone full_pipeline paralog_input --internal_outgroup Calyceraceae_Calycera_crassifolia_ERR7618534 --internal_outgroup Calyceraceae_Boopis_anthemoides_ERR7618533 --internal_outgroup Calyceraceae_Acicarpha_tribuloides_ERR4180184 --pool 5 --threads 2 --mo --rt --mi 
+# fasttree
+# paragone full_pipeline paralog_input --internal_outgroup Calyceraceae_Calycera_crassifolia_ERR7618534 --internal_outgroup Calyceraceae_Boopis_anthemoides_ERR7618533 --internal_outgroup Calyceraceae_Acicarpha_tribuloides_ERR4180184 --pool 5 --threads 2 --use_fasttree --mo --rt --mi
+
+================================================================================
+Step 4. Alignments 
+
+Organize and align loci under different Paralogy resolution:
+
+A. Hybpiper sequences (orthologs identified by Hybpiper)
+B. Paragone (paralogs resolved via ParaGone)
+   * Paragone
+      - PF 
+      - MO
+      - RT
+C. Paralogs (include/incorporate all paralogs)
+
+Step 4a: For the Hybpiper sequeneces we: align with MAFFT, filter and clean the alignments, and get summary stats. 
+
+Step 4b: Paragone outputs trimmed and aligned sequences under the different resolution algorithms. For the Paragone sequences, we copy the alignments into the 4_Alignments/Paragone directory and get the summary stats on all the different alignments. 
+
+Step 4c: For the paralog sequences we: clean the sequences names, align with MAFFT, filter and clean alignments, and get summary stats
+
+================================================================================
+Step 4a. Align and filter Hybpiper sequences
+
+To start, we will make a new directory for all the alignments: 4_Alignments 
+
+Use MAFFT with auto settings to align hybpiper sequences
+
+Then filter/cleanup the alignemnents 
+Specifically we are removing sites where more than 75% of the data is missing
+
+Finally, we get summary statistics on the alignments 
+
+Future improvements to alignment: 
+1. Optomize MAAFT settings
+2. Try a different alignment software, PASTA or UPP
+
+Future improvements to alignment cleaning: 
+1. Loci with a certain threshold of samples present (more important for concatenated trees)
+2. Loci with a minimum basepair length 
+
+form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/2_Hybpiper_sequences/Hybpiper_sequences_namesclean run:
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/alignments_hybpiper_mafft.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=12:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=15GB
+#SBATCH --job-name=alignments_hybpiper_mafft
+
+# Run this from /2_Hybpiper_sequences/Hybpiper_sequences_namesclean directory 
+
+# make a new directory for the alignments
+mkdir -p ../../4_Alignments
+mkdir ../../4_Alignments/Hybpiper
+
+## Step 1. Align loci
+
+# Run MAFFt with the auto settings
+
+module load MAFFT/7.490-gompi-2021b-with-extensions
+
+for file in *.FNA;
+do
+mafft --auto "$file" > ../../4_Alignments/Hybpiper/"${file%.FNA}"_aligned.fasta
+done
+
+# note the ${var%pattern} removes the .FNA ending giving just the loci base name and adding the _aligned.fasta ending 
+
+# Remove any alignments that are empty
+cd ../../4_Alignments/Hybpiper
+find . -type f -size 0b -delete
+
+## Step 2. Filter/clean 
+
+# Remove alignment sites based on proportion of missing data (-p)
+
+# Load phyx 
+module load phyx/1.3-foss-2022a
+
+for file in *_aligned.fasta;
+do 
+pxclsq -s $file -o "${file%_aligned.fasta}"_aligned_rm.fasta -p 0.70
+done
+
+# -p [proportion of data required to be present]
+# here, 70% of the data required to be present by column, ie sites with >30% missing data removed
+
+# Delete the unfiltered alignments 
+rm *_aligned.fasta
+
+# Remove alignments that are empty 
+find . -type f -size 0b -delete
+
+## Step 3. Summary statistics on alignment
+
+# load python and activate virtual pyton environment with AMAS installed 
+module load Python/3.9.6-GCCcore-11.2.0
+source /home4/$USER/software/venvs/target_capture/bin/activate
+
+python3 /home4/$USER/software/venvs/target_capture/lib/python3.9/site-packages/amas/AMAS.py summary --in-files  *_aligned_rm.fasta --in-format fasta --data-type dna
+
+# deactivate virtual environment
+deactivate
+
+================================================================================
+Step 4b. Organize Paragone alignments 
+
+Organize the Paragone alignments 
+
+Paragone outputs the final alignments (filtered and trimmed) under three different paralogy resolution algorithms. 
+So we will make a new directory in the 4_Alignments folder for the paragone puts 
+mkdir 4_Alignments/Paragone
+mkdir 4_Alignments/Paragone/PF
+mkdir 4_Alignments/Paragone/MO
+mkdir 4_Alignments/Paragone/RT
+
+- 26_MO_final_alignments_trimmed -> MO_final_alignments_trimmed 
+- 27_MI_final_alignments_trimmed -> PF_final_alignments_trimmed
+- 28_RT_final_alignments_trimmed -> RT_final_alignments_trimmed
+
+For MI we only want to select the paralog‐free loci, so we select all files labeled ‘1to1ortho’ from the results of the Maximum Inclusion (MI)
+Maximum Inclusion (MI) -> Paralog Free (PF)
+
+And get the summary statistics
+
+Notes after summary stats: 
+- PF: 125 loci; 346 average number of taxa; 666 average alignment length; 466 average number of variable sites
+- MO: 339 loci; 342 average number of taxa; 725 average alignment length; 516 average number of variable sites
+- RT: 1153 loci; 116 average number of taxa; 631 average alignment length; 202 average number of variable sites
+MO maximize dataset; while PF reduces loci dataset but strictly uses only loci with no paralogs
+
+form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/3_Paralogy_resolution run:
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/alignments_paragone_organize.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=12:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=15GB
+#SBATCH --job-name=alignments_paragone_organize
+
+# Run from data/3_Paralogy_resolution/
+
+# 1. Copy Paragone outputs to new 4_Alignments directory
+
+# Make new Paragone directories and subdirectories if not present already
+
+mkdir -p ../4_Alignments/Paragone
+mkdir -p ../4_Alignments/Paragone/PF
+mkdir -p ../4_Alignments/Paragone/MO
+mkdir -p ../4_Alignments/Paragone/RT
+
+# Copy paragone alignments into 4_Alignments/Paragone
+cp -r ./26_MO_final_alignments_trimmed/* ../4_Alignments/Paragone/MO
+cp -r ./27_MI_final_alignments_trimmed/*1to1ortho* ../4_Alignments/Paragone/PF
+cp -r ./28_RT_final_alignments_trimmed/* ../4_Alignments/Paragone/RT
+
+
+# 2. Summary statistics on alignment
+
+# load python and activate virtual pyton environment with AMAS installed 
+module load Python/3.9.6-GCCcore-11.2.0
+source /home4/$USER/software/venvs/target_capture/bin/activate
+
+# Get summary stats for each algorithm 
+
+# PF
+cd /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/4_Alignments/Paragone/PF
+python3 /home4/$USER/software/venvs/target_capture/lib/python3.9/site-packages/amas/AMAS.py summary --in-files  *.fasta --in-format fasta --data-type dna
+
+# MO
+cd /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/4_Alignments/Paragone/MO
+python3 /home4/$USER/software/venvs/target_capture/lib/python3.9/site-packages/amas/AMAS.py summary --in-files  *.fasta --in-format fasta --data-type dna
+
+# RT
+cd /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/4_Alignments/Paragone/RT
+python3 /home4/$USER/software/venvs/target_capture/lib/python3.9/site-packages/amas/AMAS.py summary --in-files  *.fasta --in-format fasta --data-type dna
+
+deactivate
+
+================================================================================
+Step 4c. Clean, align, filter Paralog sequences
+
+To start, we will make a new directory for all the paralog alignments: 4_Alignments/Paralogs
+mkdir /4_Alignments/Paralogs
+
+Then run the script that goes through several key steps:
+
+1. Clean paralog sequence names and output into current directory. 
+2. Align loci with MAFFT in auto settings
+3. Filter/cleanup the alignemnents 
+   * Specifically we are removing sites where more than 75% of the data is missing
+4. Get summary statistics on alignment
+
+form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/4_Alignments/Paralogs run:
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/alignments_paralogs.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=12:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=15GB
+#SBATCH --job-name=alignments_paralogs
+
+# Run this from 4_Alignments/Paralogs/
+
+# 1. Clean paralog sequence names and output into current directory (/4_Alignments/Paralogs/)
+# We call Qin's renaming python script for cleaning up the Hybpiper appended info onto the sequence names
+# This script splits the label at the space " " and keeps the paralog ids (.main, .0, etc) which we need to keep the paralog names unique for RAxML
+
+module load Python/3.9.6-GCCcore-11.2.0
+source /home4/$USER/software/venvs/target_capture/bin/activate
+
+for file in ../../2_Hybpiper_paralogs/paralogs_all/*.fasta; 
+do 
+  filename=$(basename $file) 
+  python3 /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/rename_fastafile.py $file $filename; 
+done
+
+# 2. Align loci
+# Run MAFFt with the auto settings
+
+module load MAFFT/7.490-gompi-2021b-with-extensions
+
+for file in *.fasta;
+do
+  mafft --auto "$file" > "${file%.fasta}"_aligned.fasta
+done
+# note the ${var%pattern} removes the .fasta ending giving just the loci base name and adding the _aligned.fasta ending 
+
+# Remove the original unaligned paralogs_all.fasta files, leaving paralogs_all_aligned.fasta
+rm *paralogs_all.fasta
+# Remove any alignments that are empty
+find . -type f -size 0b -delete
+
+# 3. Filter/clean alignments
+# Remove alignment sites based on proportion of missing data (-p)
+
+# Load phyx 
+module load phyx/1.3-foss-2022a
+
+for file in *_aligned.fasta;
+do 
+pxclsq -s $file -o "${file%_aligned.fasta}"_aligned_rm.fasta -p 0.70
+done
+
+# -p [proportion of data required to be present]
+# here, 70% of the data required to be present by column, ie sites with >30% missing data removed
+
+# Delete the unfiltered alignments 
+rm *_aligned.fasta
+
+# Remove alignments that are empty 
+find . -type f -size 0b -delete
+
+## 4. Summary statistics on alignment
+
+python3 /home4/$USER/software/venvs/target_capture/lib/python3.9/site-packages/amas/AMAS.py summary --in-files  *_aligned_rm.fasta --in-format fasta --data-type dna
+
+# deactivate virtual environment
+deactivate
+
+================================================================================
+Step 5. Phylogeny - Coalescent
+
+Build gene trees for each loci and summaries species tree with ASTRAL
+
+Set up Phylogeny - coalescent directory structure:
+Where the gene trees and species tree are in seperate directories nested in the source folder (ie. Paragone, Hybpiper)
+
+# Main directory
+mkdir 5_Phylogeny_coalescent
+
+# Hybpiper
+mkdir 5_Phylogeny_coalescent/Hybpiper
+mkdir 5_Phylogeny_coalescent/Hybpiper/Gene_trees
+mkdir 5_Phylogeny_coalescent/Hybpiper/Species_tree
+
+# Paragone
+mkdir 5_Phylogeny_coalescent/Paragone
+mkdir 5_Phylogeny_coalescent/Paragone/Gene_trees
+mkdir 5_Phylogeny_coalescent/Paragone/Gene_trees/PF
+mkdir 5_Phylogeny_coalescent/Paragone/Gene_trees/MO
+mkdir 5_Phylogeny_coalescent/Paragone/Gene_trees/RT
+mkdir 5_Phylogeny_coalescent/Paragone/Species_tree
+mkdir 5_Phylogeny_coalescent/Paragone/Species_tree/PF
+mkdir 5_Phylogeny_coalescent/Paragone/Species_tree/MO
+mkdir 5_Phylogeny_coalescent/Paragone/Species_tree/RT
+
+# Paralogs
+mkdir 5_Phylogeny_coalescent/Paralogs
+mkdir 5_Phylogeny_coalescent/Paralogs/Gene_trees
+mkdir 5_Phylogeny_coalescent/Paralogs/Species_tree
+
+================================================================================
+Step 5a. Build gene trees for each loci alignment (Hybpiper)
+
+Build gene trees for each loci alignment generated with the raw hybpiper sequences. 
+
+The more loci and more samples included in the project greatly increase run time, making a simple loop not the most efficient or cost effective way to build the individual gene trees. 
+
+So we set the job up as an array. 
+There are a couple small but important considerations:
+* RAxML will often add a .fasta.reduced file back to the alignment directory, so the safest strategy is to define the alignment paths and files for a given dataset to a txt file right from the start and use this in the array
+
+The work flow: 
+1. Create text that lists the path and file of all the alignments in a given dataset (i.e. Hybiper)
+2. Run array gene trees
+4. Check how all the jobs in the array performed 
+
+--------------------------------------------------------------------------------
+# Generate lists 
+
+First, Generate an alignments text file that 
+
+On the terminal, form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/5_Phylogeny_coalescent/Hybpiper/Gene_trees
+Run: ls /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/4_Alignments/Hybpiper/*_aligned_rm.fasta > alignments.txt
+
+This creates a text file with the file path and alignment file.
+
+The alignments file looks like:
+head -n 2 alignments.txt
+/scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/4_Alignments/Hybpiper/4471_aligned_rm.fasta
+/scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/4_Alignments/Hybpiper/4527_aligned_rm.fasta
+
+Count how many alignments in the dataset, this will be the array length:
+wc -l alignments.txt
+351
+
+--------------------------------------------------------------------------------
+# Build gene trees (array)
+
+form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/5_Phylogeny_coalescent/Hybpiper/Gene_trees run:
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/phylogeny_genetrees_hybpiper_array.sh
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#!/bin/bash
+
+#SBATCH --time=03:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=8
+#SBATCH --mem=8GB
+#SBATCH --cpus-per-task=1
+#SBATCH --job-name=gene_trees_array_hybpiper
+#SBATCH --array=1-351
+
+# Run this from directory: 5_Phylogeny_coalescent/Hybpiper/Gene_trees
+# Be sure to set the array number to match nukber of loci alignments
+
+# Load RAxML
+module load RAxML/8.2.12-gompi-2021b-hybrid-avx2
+
+# Define the directory containing gene alignments
+alignment=$(head -n "$SLURM_ARRAY_TASK_ID" alignments.txt | tail -1)
+echo "Reading algignment"
+echo $alignment
+
+# Extract the base name of the file (remove the path and extension)
+base_name=$(basename "$alignment" _aligned_rm.fasta)
+
+# Run RAxML for the current gene alignment
+raxmlHPC-HYBRID-AVX2 -f a -s "$alignment" -m GTRGAMMA -n "${base_name}_hybpiper" -N 100 -k -x 123 -p 456 -T $SLURM_CPUS_PER_TASK
+
+# Notes on the parameters
+# -s [sequence file]
+# -n [output file name]
+# -m [substitutionModel][GTRGAMMA or GTRGAMMAI or GTRCAT]
+# -f a [bootstrap search and ML search in one analysis]
+# -N or-# [Specify the number of alternative runs on distinct starting trees][can specify auto with autoMRE]
+# -x [randonm seed for bootstrap]
+# -p [random seed for parsimony inferences]
+# -T [number of threads]
+# -k [specifiies that the bootstrap]
+# -q [file with the partitions]
+
+--------------------------------------------------------------------------------
+# Lastly, check how the individual jobs in the array ran
+
+Get an overview of the jobs:
+sacct -n -X -u $USER -o state%20 | sort | uniq -c
+
+See the jobs that failed or timed out:
+sacct -u $USER --jobs=<ARRAY_ID> --state=TIMEOUT
+sacct -u $USER --jobs=<ARRAY_ID> --state=FAILED
+
+Count the number of gene trees to check it matches number of alignments: 
+ls -1 | grep 'bestTree' | wc -l
+
+Several loci (5) failed to produce gene trees:
+* array id 139 = 5933 
+* array id 142 = 5941 - 
+* array id 171 = 6064 -
+* array id 208 = 6379 - 
+* array id 136 = 5921
+These are some of the smallest alignments in the dataset (except 5921 which timed out). 
+
+================================================================================
+Step 5a. Build gene trees for each loci alignment (Paragone)
+
+Build gene trees for each loci alignment generated through Paragone 
+
+The more loci and more samples included in the project greatly increase run time, making a simple loop not the most efficient or cost effective way to build the individual gene trees. 
+
+So we set the job up as an array. 
+There are a couple small but important considerations:
+* RAxML will often add a .fasta.reduced file back to the alignment directory, so the safest strategy is to define the alignment paths and files for a given dataset to a txt file right from the start and use this in the array
+
+The work flow: 
+1. Create text that lists the path and file of all the alignments in a given dataset (i.e. Paragone/MO)
+2. Run array gene trees
+4. Check how all the jobs in the array performed 
+
+--------------------------------------------------------------------------------
+# Generate lists 
+
+First, Generate an alignments text file that 
+
+# PF
+On the terminal, form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/5_Phylogeny_coalescent/Paragone/Gene_trees/PF
+Run: ls /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/4_Alignments/Paragone/PF/*.fasta > alignments.txt
+# MO
+On the terminal, form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/5_Phylogeny_coalescent/Paragone/Gene_trees/MO
+Run: ls /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/4_Alignments/Paragone/MO/*.fasta > alignments.txt
+# RT
+On the terminal, form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/5_Phylogeny_coalescent/Paragone/Gene_trees/RT
+Run: ls /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/4_Alignments/Paragone/RT/*.fasta > alignments.txt
+
+This creates a text files with the file path and alignment file.
+
+The alignments file looks like:
+head -n 2 alignments.txt
+/scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/4_Alignments/Paragone/PF/4954_1.1to1ortho.selected_stripped.aln.trimmed.fasta
+/scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/4_Alignments/Paragone/PF/5034_1.1to1ortho.selected_stripped.aln.trimmed.fasta
+
+Count how many alignments in the dataset, this will be the array length:
+# PF
+wc -l alignments.txt
+125
+
+# MO
+wc -l alignments.txt
+339
+
+# RT
+wc -l alignments.txt
+1153
+
+Logistics note: limit of 1000 active jobs on Habrok, so PF and MO can be run at same time, but RT needs to be split into two jobs with each run seperately
+
+--------------------------------------------------------------------------------
+# Build gene trees: Paragone-PF (array)
+
+form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/5_Phylogeny_coalescent/Paragone/Gene_trees/PF run:
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/phylogeny_genetrees_paragonePF_array.sh
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#!/bin/bash
+
+#SBATCH --time=03:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=8
+#SBATCH --mem=8GB
+#SBATCH --cpus-per-task=1
+#SBATCH --job-name=gene_trees_array_paragone-PF
+#SBATCH --array=1-125
+
+# Be sure to set the array number to match number of loci alignments!
+
+# Run this from directory: 5_Phylogeny_coalescent/Paragone/Gene_trees/PF
+
+# Load RAxML
+module load RAxML/8.2.12-gompi-2021b-hybrid-avx2
+
+# Define the directory containing gene alignments
+alignment=$(head -n "$SLURM_ARRAY_TASK_ID" alignments.txt | tail -1)
+echo "Reading algignment"
+echo $alignment
+
+# Extract the base name of the file (remove the path and extension)
+# .selected_stripped.aln.trimmed.fasta
+base_name=$(basename "$alignment" .selected_stripped.aln.trimmed.fasta)
+
+# Run RAxML for the current gene alignment
+raxmlHPC-HYBRID-AVX2 -f a -s "$alignment" -m GTRGAMMA -n "${base_name}_paragonePF" -N 100 -k -x 123 -p 456 -T $SLURM_CPUS_PER_TASK
+
+# Notes on the parameters
+# -s [sequence file]
+# -n [output file name]
+# -m [substitutionModel][GTRGAMMA or GTRGAMMAI or GTRCAT]
+# -f a [bootstrap search and ML search in one analysis]
+# -N or-# [Specify the number of alternative runs on distinct starting trees][can specify auto with autoMRE]
+# -x [randonm seed for bootstrap]
+# -p [random seed for parsimony inferences]
+# -T [number of threads]
+# -k [specifiies that the bootstrap]
+# -q [file with the partitions]
+
+--------------------------------------------------------------------------------
+# Build gene trees: Paragone-MO (array)
+
+form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/5_Phylogeny_coalescent/Paragone/Gene_trees/MO run:
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/phylogeny_genetrees_paragoneMO_array.sh
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#!/bin/bash
+
+#SBATCH --time=03:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=8
+#SBATCH --mem=8GB
+#SBATCH --cpus-per-task=1
+#SBATCH --job-name=gene_trees_array_paragone-MO
+#SBATCH --array=1-339
+
+# Be sure to set the array number to match number of loci alignments!
+
+# Run this from directory: 5_Phylogeny_coalescent/Paragone/Gene_trees/MO
+
+# Load RAxML
+module load RAxML/8.2.12-gompi-2021b-hybrid-avx2
+
+# Define the directory containing gene alignments
+alignment=$(head -n "$SLURM_ARRAY_TASK_ID" alignments.txt | tail -1)
+echo "Reading algignment"
+echo $alignment
+
+# Extract the base name of the file (remove the path and extension)
+# .selected_stripped.aln.trimmed.fasta
+base_name=$(basename "$alignment" .selected_stripped.aln.trimmed.fasta)
+
+# Run RAxML for the current gene alignment
+raxmlHPC-HYBRID-AVX2 -f a -s "$alignment" -m GTRGAMMA -n "${base_name}_paragoneMO" -N 100 -k -x 123 -p 456 -T $SLURM_CPUS_PER_TASK
+
+# Notes on the parameters
+# -s [sequence file]
+# -n [output file name]
+# -m [substitutionModel][GTRGAMMA or GTRGAMMAI or GTRCAT]
+# -f a [bootstrap search and ML search in one analysis]
+# -N or-# [Specify the number of alternative runs on distinct starting trees][can specify auto with autoMRE]
+# -x [randonm seed for bootstrap]
+# -p [random seed for parsimony inferences]
+# -T [number of threads]
+# -k [specifiies that the bootstrap]
+# -q [file with the partitions]
+
+--------------------------------------------------------------------------------
+# Build gene trees: Paragone-RT 1 (array)
+
+form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/5_Phylogeny_coalescent/Paragone/Gene_trees/RT run:
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/phylogeny_genetrees_paragoneRT_array1.sh
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#!/bin/bash
+
+#SBATCH --time=03:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=8
+#SBATCH --mem=8GB
+#SBATCH --cpus-per-task=1
+#SBATCH --job-name=gene_trees_array_paragone-RT_1
+#SBATCH --array=1-900
+
+# Run this from directory: 5_Phylogeny_coalescent/Paragone/Gene_trees/RT
+# Note: Habrok limit of 1000 jobs at one time, so need to split array into 2 and run at seperate times
+# run loci 1-900
+
+# Load RAxML
+module load RAxML/8.2.12-gompi-2021b-hybrid-avx2
+
+# Define the directory containing gene alignments
+alignment=$(head -n "$SLURM_ARRAY_TASK_ID" alignments.txt | tail -1)
+echo "Reading algignment"
+echo $alignment
+
+# Extract the base name of the file (remove the path and extension)
+# .selected_stripped.aln.trimmed.fasta
+base_name=$(basename "$alignment" .selected_stripped.aln.trimmed.fasta)
+
+# Run RAxML for the current gene alignment
+raxmlHPC-HYBRID-AVX2 -f a -s "$alignment" -m GTRGAMMA -n "${base_name}_paragoneRT" -N 100 -k -x 123 -p 456 -T $SLURM_CPUS_PER_TASK
+
+# Notes on the parameters
+# -s [sequence file]
+# -n [output file name]
+# -m [substitutionModel][GTRGAMMA or GTRGAMMAI or GTRCAT]
+# -f a [bootstrap search and ML search in one analysis]
+# -N or-# [Specify the number of alternative runs on distinct starting trees][can specify auto with autoMRE]
+# -x [randonm seed for bootstrap]
+# -p [random seed for parsimony inferences]
+# -T [number of threads]
+# -k [specifiies that the bootstrap]
+# -q [file with the partitions]
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Next, run array batch 2
+
+Second batch are loci 901-1153.
+
+form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/5_Phylogeny_coalescent/Paragone/Gene_trees/RT run:
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/phylogeny_genetrees_paragoneRT_array2.sh
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#!/bin/bash
+
+#SBATCH --time=03:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=8
+#SBATCH --mem=8GB
+#SBATCH --cpus-per-task=1
+#SBATCH --job-name=gene_trees_array_paragone-RT_2
+#SBATCH --array=1-253
+
+# Run this from directory: 5_Phylogeny_coalescent/Paragone/Gene_trees/RT
+# Note: Habrok limit of 1000 jobs at one time, so need to split array into 2 and run at seperate times
+# check the number of alignments to get exact array range (here 1153)
+# run loci 901-1153: set array to 1-253 (1153-900=253) and below adjust counter to 1+900
+
+# Load RAxML
+module load RAxML/8.2.12-gompi-2021b-hybrid-avx2
+
+# Read the gene alignment file corresponding to the current task in the array.
+alignment=$(head -n $(($SLURM_ARRAY_TASK_ID + 900)) alignments.txt | tail -1)
+echo "Reading alignment:"
+echo $alignment
+
+# Extract the base name of the file (remove the path and extension)
+# .selected_stripped.aln.trimmed.fasta
+base_name=$(basename "$alignment" .selected_stripped.aln.trimmed.fasta)
+
+# Run RAxML for the current gene alignment
+raxmlHPC-HYBRID-AVX2 -f a -s "$alignment" -m GTRGAMMA -n "${base_name}_paragoneRT" -N 100 -k -x 123 -p 456 -T $SLURM_CPUS_PER_TASK
+
+# Notes on the parameters
+# -s [sequence file]
+# -n [output file name]
+# -m [substitutionModel][GTRGAMMA or GTRGAMMAI or GTRCAT]
+# -f a [bootstrap search and ML search in one analysis]
+# -N or-# [Specify the number of alternative runs on distinct starting trees][can specify auto with autoMRE]
+# -x [randonm seed for bootstrap]
+# -p [random seed for parsimony inferences]
+# -T [number of threads]
+# -k [specifiies that the bootstrap]
+# -q [file with the partitions]
+
+--------------------------------------------------------------------------------
+# Lastly, check how the individual jobs in the array ran
+
+Get an overview of the jobs:
+sacct -n -X -u $USER -o state%20 | sort | uniq -c
+
+See the jobs that failed or timed out:
+sacct -u $USER --jobs=<ARRAY_ID> --state=TIMEOUT
+sacct -u $USER --jobs=<ARRAY_ID> --state=FAILED
+
+Count the number of gene trees to check it matches number of alignments in each of the Paragone algorithm directories (PF, MO, RT)
+ls -1 | grep 'bestTree' | wc -l
+
+# MO
+Several loci (1) failed to produce gene trees:
+* array id 127 = 5921_1.ortho 
+Alignment length large and timed out 
+
+# RT
+Several loci (1) failed to produce gene trees:
+* array id 429 = 5921_1.inclade1.ortho1
+Alignment length large and timed out 
+
+================================================================================
+Step 5a. Build gene trees for each loci alignment (Paralogs)
+
+Build gene trees for each loci alignment with paralogs included
+
+The more loci and more samples included in the project greatly increase run time, making a simple loop not the most efficient or cost effective way to build the individual gene trees. 
+
+So we set the job up as an array. 
+There are a couple small but important considerations:
+* RAxML will often add a .fasta.reduced file back to the alignment directory, so the safest strategy is to define the alignment paths and files for a given dataset to a txt file right from the start and use this in the array
+
+The work flow: 
+1. Create text that lists the path and file of all the alignments in a given dataset (i.e. Paralogs)
+2. Run array gene trees
+4. Check how all the jobs in the array performed 
+
+--------------------------------------------------------------------------------
+# Generate lists 
+
+First, Generate an alignments text file that 
+
+On the terminal, form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/5_Phylogeny_coalescent/Paralogs/Gene_trees
+Run: ls /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/4_Alignments/Paralogs/*.fasta > alignments.txt
+
+This creates a text files with the file path and alignment file.
+
+The alignments file looks like:
+head -n 2 alignments.txt
+/scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/4_Alignments/Paralogs/4471_paralogs_all_aligned_rm.fasta
+/scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/4_Alignments/Paralogs/4527_paralogs_all_aligned_rm.fasta
+
+Count how many alignments in the dataset, this will be the array length:
+wc -l alignments.txt
+351
+
+--------------------------------------------------------------------------------
+# Build gene trees: Paralogs (array)
+
+form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/5_Phylogeny_coalescent/Paralogs/Gene_trees run:
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/phylogeny_genetrees_paralogs_array.sh
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#!/bin/bash
+
+#SBATCH --time=03:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=8
+#SBATCH --mem=8GB
+#SBATCH --cpus-per-task=1
+#SBATCH --job-name=gene_trees_array_paralogs
+#SBATCH --array=1-351
+
+# Run this from directory: 5_Phylogeny_coalescent/Paralogs/Gene_trees
+# Be sure to set the array number to match nukber of loci alignments
+
+# Load RAxML
+module load RAxML/8.2.12-gompi-2021b-hybrid-avx2
+
+# Define the directory containing gene alignments
+alignment=$(head -n "$SLURM_ARRAY_TASK_ID" alignments.txt | tail -1)
+echo "Reading algignment"
+echo $alignment
+
+# Extract the base name of the file (remove the path and extension)
+base_name=$(basename "$alignment" _all_aligned_rm.fasta)
+
+# Run RAxML for the current gene alignment
+raxmlHPC-HYBRID-AVX2 -f a -s "$alignment" -m GTRGAMMA -n "${base_name}" -N 100 -k -x 123 -p 456 -T $SLURM_CPUS_PER_TASK
+
+# Notes on the parameters
+# -s [sequence file]
+# -n [output file name]
+# -m [substitutionModel][GTRGAMMA or GTRGAMMAI or GTRCAT]
+# -f a [bootstrap search and ML search in one analysis]
+# -N or-# [Specify the number of alternative runs on distinct starting trees][can specify auto with autoMRE]
+# -x [randonm seed for bootstrap]
+# -p [random seed for parsimony inferences]
+# -T [number of threads]
+# -k [specifiies that the bootstrap]
+# -q [file with the partitions]
+
+--------------------------------------------------------------------------------
+# Lastly, check how the individual jobs in the array ran
+
+Get an overview of the jobs:
+sacct -n -X -u $USER -o state%20 | sort | uniq -c
+
+See the jobs that failed or timed out:
+sacct -u $USER --jobs=<ARRAY_ID> --state=TIMEOUT
+sacct -u $USER --jobs=<ARRAY_ID> --state=FAILED
+
+Count the number of gene trees to check it matches number of alignments: 
+ls -1 | grep 'bestTree' | wc -l
+
+Several loci (4) failed to produce gene trees:
+* array id 139 - 5933 (undermined values for 3 samples)
+* array id 142 - 5941 (small alignment length)
+* array id 171 - 6064 (small alignment lenght with 6bp)
+* array id 136 - 5922 (timeout - long alignment)
+
+================================================================================
+Step 5b. Build coalesent species tree with ASTRAL (Hybpiper)
+
+The main steps:
+1. Concatenate the gene tree files 
+2. Run ASTRAL 
+
+Build species tree with Weighted ASTRAL (wASTRAL) - Hybrid (default) 
+* Threshold-free weighting schemes for the quartet-based species tree inference, the metric used in the popular method ASTRAL. 
+*  By reducing the impact of quartets with low support or long terminal branches (or both), weighting provides stronger theoretical guarantees and better empirical performance than the unweighted ASTRAL
+* https://github.com/chaoszhang/ASTER/blob/master/tutorial/wastral.md
+
+wASTRAL outputs:
+* the species tree topology
+* branch lengths in coalescent units for astral-weighted and in combined (coalensecent + 2 * substitution) units (only for internal branches)
+* branch supports measured as local posterior probabilities
+
+form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/5_Phylogeny_coalescent/Hybpiper/Species_tree run:
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/phylogeny_speciestree_hybpiper_astral.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=06:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=5GB
+#SBATCH --job-name=phylogeny_speciestree_astral
+
+# Run from /5_Phylogeny_coalescent/Hybpiper/Species_tree
+
+# Concatenate all the gene trees into one file
+cat ../Gene_trees/RAxML_bipartitions.* > all_genetrees_hybiper.tre
+
+# Build species tree with w-ASTRAL (hybrid)
+# Weighted ASTRAL (wASTRAL) - Hybrid (default) 
+# Threshold-free weighting schemes for the quartet-based species tree inference, the metric used in the popular method ASTRAL. 
+# https://github.com/chaoszhang/ASTER/blob/master/tutorial/wastral.md
+
+module load ASTER
+
+astral-hybrid -x 100 -n 33 -i all_genetrees_hybiper.tre -o Species_tree_hybpiper_wastral.tre 2> Species_tree_hybpiper_wastral.log
+astral-pro -i all_genetrees_hybiper.tre -o Species_tree_hybpiper_astralpro.tre 2> Species_tree_hybpiper_astralpro.log
+
+================================================================================
+Step 5b. Build coalesent species tree with ASTRAL (Paragone)
+
+The main steps for each algorithm (PF, MO, RT)
+1. Concatenate the gene tree files 
+2. Run ASTRAL 
+
+Build species tree with Weighted ASTRAL (wASTRAL) - Hybrid (default) 
+* Threshold-free weighting schemes for the quartet-based species tree inference, the metric used in the popular method ASTRAL. 
+*  By reducing the impact of quartets with low support or long terminal branches (or both), weighting provides stronger theoretical guarantees and better empirical performance than the unweighted ASTRAL
+* https://github.com/chaoszhang/ASTER/blob/master/tutorial/wastral.md
+
+wASTRAL outputs:
+* the species tree topology
+* branch lengths in coalescent units for astral-weighted and in combined (coalensecent + 2 * substitution) units (only for internal branches)
+* branch supports measured as local posterior probabilities
+
+form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/5_Phylogeny_coalescent/Paragone/Species_tree run:
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/phylogeny_speciestree_paragone_astral.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=06:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=5GB
+#SBATCH --job-name=phylogeny_speciestree_paragone_astral
+
+# Run from /5_Phylogeny_coalescent/Paragone/Species_tree
+
+# Concatenate all the gene trees into one file
+cat ../Gene_trees/PF/RAxML_bipartitions.* > PF/all_genetrees_paragonePF.tre
+cat ../Gene_trees/MO/RAxML_bipartitions.* > MO/all_genetrees_paragoneMO.tre
+cat ../Gene_trees/RT/RAxML_bipartitions.* > RT/all_genetrees_paragoneRT.tre
+
+# Build species tree with w-ASTRAL (hybrid)
+# Weighted ASTRAL (wASTRAL) - Hybrid (default) 
+# Threshold-free weighting schemes for the quartet-based species tree inference, the metric used in the popular method ASTRAL. 
+# https://github.com/chaoszhang/ASTER/blob/master/tutorial/wastral.md
+
+module load ASTER
+
+astral-hybrid -x 100 -n 33 -i PF/all_genetrees_paragonePF.tre -o PF/Species_tree_paragonePF_wastral.tre 2> PF/Species_tree_paragonePF_wastral.log
+astral-hybrid -x 100 -n 33 -i MO/all_genetrees_paragoneMO.tre -o MO/Species_tree_paragoneMO_wastral.tre 2> MO/Species_tree_paragoneMO_wastral.log
+astral-hybrid -x 100 -n 33 -i RT/all_genetrees_paragoneRT.tre -o RT/Species_tree_paragoneRT_wastral.tre 2> RT/Species_tree_paragoneRT_wastral.log
+
+================================================================================
+Step 5b. Build coalesent species tree with ASTRAL (Paralogs)
+
+The main steps:
+1. Concatenate the gene tree files 
+2. Filter out the paralog ids so that the paralogs of the same sample are forced monophyletic
+3. Run ASTRAL 
+
+Build species tree with ASTRALpro
+   * Can handle multiple copy genes
+   * https://github.com/chaoszhang/ASTER/blob/master/tutorial/astral-pro3.md
+   * https://doi.org/10.1093/bioinformatics/btac620
+   * https://doi.org/10.1093/molbev/msaa139
+
+ASTRALpro input:
+ * The input gene trees are in the Newick format
+ * The input trees can have missing taxa, polytomies (unresolved branches), and multi-copy genes
+ * When multiple genes from the same species are available, you ask ASTRAL to force them to be together in the species tree via a mapping file or identical species names (strip paralogs ids - .main, .0, .1)
+
+ASTRALpro outputs:
+ * the species tree topology
+ * branch lengths in substitution-per-site units (IQ-TREE like) for all branches
+ * branch supports measured as local posterior probabilities
+
+form /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/5_Phylogeny_coalescent/Paralogs/Species_tree run:
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/phylogeny_speciestree_paralogs_astralpro.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=06:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=5GB
+#SBATCH --job-name=phylogeny_speciestree_paralogs_astralpro
+
+# Run from /5_Phylogeny_coalescent/Hybpiper/Species_tree
+
+# Concatenate all the gene trees into one file
+cat ../Gene_trees/RAxML_bipartitions.* > all_genetrees_paralogs.tre
+
+# Filter the gene trees to remove paralog IDs (.main, .0, .1, ...)
+sed -E 's/(\.[0-9]+|\.main):/:/g' all_genetrees_paralogs.tre > all_genetrees_paralogs_filtered.tre
+
+# Build species tree with ASTRAL-pro
+# https://github.com/chaoszhang/ASTER/blob/master/tutorial/astral-pro3.md
+
+module load ASTER
+
+astral-pro -i all_genetrees_paralogs_filtered.tre -o Species_tree_paralogs_astralpro.tre 2> Species_tree_paralogs_astralpro.log
+
+================================================================================
+Step 5. Phylogeny - Coalescent: Tree comparison
+
+At this stage we want to compare different tree build strategies: 
+1. Hybpiper - taking forward hybpipers native selection of the best contigs (hybpiper default)
+2. Paragone-PF - paralogy free loci
+3. Paragone-MO - paralogy resolution with "Monophyletic Outgroup" algorithm
+4. Paragone-RT - paralog resolution with with "Rooted Trees" algorithm 
+5. Paralogs - utilizing paralogs in tree building 
+
+--------------------------------------------------------------------------------
+Tree Comparison: Robinson Foulds Distances
+
+Robinson-Foulds (RF) distance is a metric used to compare the differences between two phylogenetic trees. It's a commonly used measure in computational biology and bioinformatics to assess the similarity or dissimilarity between trees. 
+
+The RF distance measures the dissimilarity between two phylogenetic trees by counting the number of different splits (bipartitions) between the trees. A split in a tree divides the set of taxa (species or genes) into two non-overlapping groups. The RF distance essentially counts the number of splits that are present in one tree but not in the other.
+
+The R script below computed the RF distances between the trees and outputs a heatmap plot to compare the trees, and we also perfomr PCA on the distance matrix to provide a visual representation of the overall similarity among the trees. 
+
+
+Observations from the heatmap and PCA: 
+   * Hybpiper (defualt), Paragone-MO, Paragone-RT form a cluster of similarity. This suggest Hybpiper default does a similar job to methods that actively resolve paralogs
+   * Trees with the greatest dissimilarity: Paralogs and Paragone-PF. This makes sense...one actively incorporates information from paralogs wilte the other exclused loci with paralogs entirely
+   * The paralog-free dataset (Paragone-PF) is distinct from paralogy resolution
+
+
+Run the Rscript below directly on the command line 
+from /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/5_Phylogeny_coalescent/Tree_comparison
+module load R
+Rscript /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/Tree_comparison.R
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#!/usr/bin/env Rscript
+
+# Adjusted Robinson Foulds Distance
+
+# Load necessary libraries
+library(phangorn)
+library(ape)
+library(phytools)
+library(ggplot2)
+library(vegan)
+library(reshape2)
+library(viridis)
+library(ggrepel)
+
+# Read the trees
+# Be sure path is correct
+tr1 <- read.tree("../Hybpiper/Species_tree/Species_tree_hybpiper_wastral.tre")
+tr2 <- read.tree("../Paragone/Species_tree/PF/Species_tree_paragonePF_wastral.tre")
+tr3 <- read.tree("../Paragone/Species_tree/MO/Species_tree_paragoneMO_wastral.tre")
+tr4 <- read.tree("../Paragone/Species_tree/RT/Species_tree_paragoneRT_wastral.tre")
+tr5 <- read.tree("../Paralogs/Species_tree/Species_tree_paralogs_astralpro.tre")
+
+# 1. Preparation 
+
+## Root the trees
+outgroup <- c("Calyceraceae_Calycera_crassifolia_ERR7618534", "Calyceraceae_Acicarpha_tribuloides_ERR4180184", "Calyceraceae_Boopis_anthemoides_ERR7618533")
+outgroup4 <- c("Barnadesioideae_Barnadesieae_Schlechtendalia_luzulifolia_ERR7618367", "Barnadesioideae_Barnadesieae_Barnadesia_odorata_ERR5033727", "Barnadesioideae_Barnadesieae_Chuquiraga_straminea_ERR7618373")
+
+tr1 <- root(tr1, outgroup = outgroup, resolve.root = TRUE)
+tr2 <- root(tr2, outgroup = outgroup, resolve.root = TRUE)
+tr3 <- root(tr3, outgroup = outgroup, resolve.root = TRUE)
+tr4 <- root(tr4, outgroup = outgroup4, resolve.root = TRUE)
+tr5 <- root(tr5, outgroup = outgroup, resolve.root = TRUE)
+
+# Check if the trees are rooted
+cat("Is tr1 rooted?", is.rooted(tr1), "\n")
+cat("Is tr2 rooted?", is.rooted(tr2), "\n")
+cat("Is tr3 rooted?", is.rooted(tr3), "\n")
+cat("Is tr4 rooted?", is.rooted(tr4), "\n")
+cat("Is tr5 rooted?", is.rooted(tr5), "\n")
+
+# Remove the outgroup from trees 1:3 to match RT
+species <- outgroup
+pruned.tr1 <- drop.tip(tr1, species)
+pruned.tr2 <- drop.tip(tr2, species)
+pruned.tr3 <- drop.tip(tr3, species)
+pruned.tr5 <- drop.tip(tr5, species)
+
+# Check if the pruned trees are still rooted
+cat("Is pruned.tr1 rooted?", is.rooted(pruned.tr1), "\n")
+cat("Is pruned.tr2 rooted?", is.rooted(pruned.tr2), "\n")
+cat("Is pruned.tr3 rooted?", is.rooted(pruned.tr3), "\n")
+cat("Is pruned.tr5 rooted?", is.rooted(pruned.tr5), "\n")
+
+# 2. Make a table of RFadj values
+
+# Create an empty matrix with 4 rows and 4 columns
+matrixinp = matrix(data=NA, nrow=5, ncol=5) 
+
+# Display the empty matrix 
+print(matrixinp)
+
+# Make list of trees
+tree_list <- list(pruned.tr1, pruned.tr2, pruned.tr3, tr4, pruned.tr5)
+
+for(j in 1:length(tree_list)){ 
+  for (i in 1:length(tree_list)) {
+    tree1 <- tree_list[[i]]  
+    tree2 <- tree_list[[j]]
+    matrixinp[i,j] = RF.dist(tree1, tree2, check.labels = TRUE, normalize = TRUE, rooted = TRUE)
+  }
+} 
+
+# Give the matrix column and row names
+colnames(matrixinp) <- c("HybPiper", "ParaGone-PF", "ParaGone-MO", "ParaGone-RT", "Paralogs")
+rownames(matrixinp) <- c("HybPiper", "ParaGone-PF", "ParaGone-MO", "ParaGone-RT", "Paralogs")
+
+# View the matrix
+matrixinp
+
+# export the matrix as a csv
+write.csv(matrixinp, "RFDistance_Hawaii_Mascarenes_Asteraceae_coalescent.csv")
+
+# Plot the heatmap
+
+# Melt the matrix to long format
+matrix_long <- melt(matrixinp)
+
+# Filter out the lower triangle and the diagonal by setting lower triangle values to NA
+matrix_long <- matrix_long[as.numeric(matrix_long$Var1) <= as.numeric(matrix_long$Var2), ]
+
+# Plot the heatmap with viridis color scale
+heatmap_plot <- ggplot(data = matrix_long, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_viridis(name = "RF Distance", option = "D", direction = 1) +
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+                                   size = 10, hjust = 1),
+        axis.text.y = element_text(size = 10),
+        title = element_text(size = 10)) +
+  labs(x = 'Tree Comparison', y = 'Tree Comparison', title = 'Heatmap of Adjusted Robinson-Foulds Distances')
+
+# Print the heatmap
+print(heatmap_plot)
+
+ggsave(heatmap_plot,
+       filename = "heatmap_RFDistance_Hawaii_Mascarenes_Asteraceae_coalescent.pdf", 
+       device = "pdf", width = 5, height = 4, units = "in")
+
+
+# 3. Visualize Robinson-Foulds values as a PCA
+# Classical multidimensional scaling (MDS) of a data matrix. Also known as principal coordinates analysis:
+
+pca <- pcoa(matrixinp, correction = "none", rn = NULL)
+
+# Convert PCoA results to a data frame for plotting
+pca_df <- as.data.frame(pca$vectors)
+pca_df$Sample <- rownames(pca_df)  # Add sample names for labeling
+
+# Plot PCA
+pca_plot <- ggplot(pca_df, aes(x = Axis.1, y = Axis.2)) +
+  geom_point(size = 3, aes(color = Sample)) +
+  geom_text_repel(aes(label = Sample), size = 4, box.padding = 0.5, point.padding = 0.5, max.overlaps = Inf) +
+  scale_color_manual(values = RColorBrewer::brewer.pal(n = length(unique(pca_df$Sample)), name = "Set1")) +  # Use a default ggplot2 color palette
+  theme_bw() +  # Use theme_bw for a clean background
+  theme(plot.margin = margin(10, 10, 10, 10),  # Ensure there's space around the plot
+        axis.title = element_text(size = 14),
+        axis.text = element_text(size = 12),
+        legend.position = "none") +  # Remove legend
+  labs(x = paste("PCoA Axis 1 (", round(pca$values$Relative_eigenvalues[1] * 100, 1), "%)", sep = ""),
+       y = paste("PCoA Axis 2 (", round(pca$values$Relative_eigenvalues[2] * 100, 1), "%)", sep = ""),
+       title = "PCA of Robinson-Foulds Distances")
+pca_plot
+
+# Save the PCA plot
+ggsave(pca_plot, filename = "pca_RFDistance_Hawaii_Mascarenes_Asteraceae_coalescent.pdf", device = "pdf", width = 6, height = 5, units = "in")
+
+--------------------------------------------------------------------------------
+Tree Comparison: Topology 
+
+Manually compare the ASTRAL trees, looking at the family backbone and focusing on the relationships of the island samples across the trees.
+
+================================================================================
+Step 6. Phylogeny - ML concatenation 
+
+Build a ML phylogeny with a concatenated dataset. 
+
+First, we reduce the loci dataset down to the most informative genes using a "gene shopping" appoach (SortaDate)
+Second, we concatenate the loci and run a ML phylogeny that we will date. 
+
+Set up directory structure:
+mkdir 6_Phylogeny_ML
+mkdir 6_Phylogeny_ML/Hybpiper
+mkdir 6_Phylogeny_ML/Hybpiper/Rooted_gene_trees
+mkdir 6_Phylogeny_ML/Hybpiper/SortaDate
+mkdir 6_Phylogeny_ML/Hybpiper/Phylogeny_ML 
+
+mkdir 6_Phylogeny_ML/Paragone-PF
+mkdir 6_Phylogeny_ML/Paragone-PF/Rooted_gene_trees
+mkdir 6_Phylogeny_ML/Paragone-PF/SortaDate
+mkdir 6_Phylogeny_ML/Paragone-PF/Phylogeny_ML 
+
+mkdir 6_Phylogeny_ML/Paragone-MO
+mkdir 6_Phylogeny_ML/Paragone-MO/Rooted_gene_trees
+mkdir 6_Phylogeny_ML/Paragone-MO/SortaDate
+mkdir 6_Phylogeny_ML/Paragone-MO/Phylogeny_ML 
+
+================================================================================
+6a. Phylogeny - ML concatenation: Gene Shopping (Hybpiper)
+
+ “Gene shopping” is where phylogenomic dataset is winnowed to a set of genes with desirable properties.
+
+ Here we run SortaDate (Smith 2018) to select the 25 and 100 most informative loci base on the following criteria
+ 1. Gene trees were ﬁltered by their similarity to the species tree
+ 2. clock-likeness (as indicated by root-to-tip variance)
+ 3. tree length.
+
+ Paper: https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0197433
+ Github: 
+
+Approach implemented in Joyce 2023 (https://doi.org/10.3389/fpls.2023.1063174) and Zuntini 2024 (https://doi.org/10.1038/s41586-024-07324-0) for example. 
+
+SortaDate requires phyx, which is already installed. Run the following to install SortaDate into python virtual environment:
+# Load Python Module
+module load Python/3.9.6-GCCcore-11.2.0
+# Activate Virtual Environment
+source /home4/$USER/software/venvs/target_capture/bin/activate
+# Clone SortaDate Repository: Download the SortaDate package from GitHub
+git clone https://github.com/FePhyFoFum/SortaDate.git
+cd SortaDate
+# Check installation
+python src/get_var_length.py -h
+
+SortaDate has two input requirements:
+* a species tree topology must be provided 
+* individual gene trees must be rooted (this is typically performed using outgroups)
+
+This script is doing the following:
+1. Root gene trees 
+2. Run SortaDate to winnow down to the 25/100 most informative loci
+3. Extract alignments for the 25/100 loci 
+
+from /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/6_Phylogeny_ML/Hybpiper run: 
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/geneshopping_hybpiper.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=1:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=1GB
+#SBATCH --job-name=SortaDate
+
+# Run this from 6_Phylogeny_ML/<Dataset>
+
+# Directorues and paths
+# Update paths to match datasets 
+ALIGNMENTS_DIR="/scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/4_Alignments/Hybpiper"
+SORTADATE_DIR="/scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/6_Phylogeny_ML/Hybpiper/SortaDate"
+ALIGNMENTS_OUTPUT_DIR1="$SORTADATE_DIR/Alignments25"
+ALIGNMENTS_OUTPUT_DIR2="$SORTADATE_DIR/Alignments100"
+
+# Create output directory for the alignments (for Step 3)
+mkdir -p "$ALIGNMENTS_OUTPUT_DIR1"
+mkdir -p "$ALIGNMENTS_OUTPUT_DIR2"
+
+# Step 1. Root gene trees
+
+# load phyx 
+module load phyx/1.3-foss-2022a
+
+cd Rooted_gene_trees/
+
+# Root gene trees 
+# Be sure to update to correct path to match dataset! 
+# Update the outgroup as needed - Here we root between Asteraceae and Calyceraceae
+for file in ../../../5_Phylogeny_coalescent/Hybpiper/Gene_trees/RAxML_bipartitions.*_hybpiper;
+do
+    filename=$(basename "$file")  # Extracting just the file name without the path
+    pxrr -t "$file" -g Calyceraceae_Calycera_crassifolia_ERR7618534,Calyceraceae_Boopis_anthemoides_ERR7618533,Calyceraceae_Acicarpha_tribuloides_ERR4180184 -o "rooted_${filename}" -s
+done
+
+# Step 2. Sorta date
+
+cd ../SortaDate/
+module load Python/3.9.6-GCCcore-11.2.0
+
+#2a. Get the tip-to-root variation with the get_var_length.py
+# get_var_length.py DIR [-h] [--flend FILEENDING] [--outg OUTGROUPS] [--loc PHYX_LOCATION] [--outf OUTF]
+
+python /home4/$USER/software/SortaDate/src/get_var_length.py ../Rooted_gene_trees/ --flend _hybpiper --outg Calyceraceae_Calycera_crassifolia_ERR7618534,Calyceraceae_Boopis_anthemoides_ERR7618533,Calyceraceae_Acicarpha_tribuloides_ERR4180184 --outf var_length
+
+#2b. Get the bipartition support with get_bp_genetrees.py
+# get_bp_genetrees.py [-h] [--flend FILEENDING] [--loc PHYX_LOCATION] [--outf OUTF] DIR SPECIESTREE
+# note here: species tree is wASTRAL with min at 0.33
+python /home4/$USER/software/SortaDate/src/get_bp_genetrees.py ../Rooted_gene_trees/ --flend _hybpiper ../../../5_Phylogeny_coalescent/Hybpiper/Species_tree/Species_tree_hybpiper_wastral.tre --outf bp
+
+# Deal with problematic loci
+# Several loci pose problems for combing in the results: in var_length some loci are NA; in bp some loci are 0
+# We will filter out these loci in order for combine_results.py to run smoothly
+awk '/NA/ {print $1}' var_length > skipped_genes.txt
+awk 'NR==FNR {skipped[$1]; next} !($1 in skipped)' skipped_genes.txt var_length > var_length_filtered
+awk 'NR==FNR {skipped[$1]; next} !($1 in skipped)' skipped_genes.txt bp > bp_filtered
+
+#2c. Combine the results from these two runs with combine_results.py
+# combine_results.py [-h] [--outf OUTF] VAR BP
+python /home4/$USER/software/SortaDate/src/combine_results.py var_length_filtered bp_filtered --outf combined_results
+
+#2d. Sort and get the list of the good genes with get_good_genes.py
+# get_good_genes.py [-h] [--order ORDER] [--max MAX] [--outf OUTF] COMB
+# --order gives the sorting order, where 1=root-to-tip variance, 2=treelength, 3=bipartition 
+# 25 best loci
+python /home4/$USER/software/SortaDate/src/get_good_genes.py combined_results --max 25 --order 3,1,2 --outf SortaDate_genes25
+# 100 best loci
+python /home4/$USER/software/SortaDate/src/get_good_genes.py combined_results --max 100 --order 3,1,2 --outf SortaDate_genes100
+
+# Step 3. Extract loci alignments for the SortaDate loci
+# Copy alignment files of the best genes
+
+# 25
+while IFS= read -r line; do
+    # Skip the header line
+    [[ "$line" == name* ]] && continue
+    # Extract the gene name from the first column
+    gene_name=$(echo "$line" | awk '{print $1}')
+    # Remove the prefix "rooted_RAxML_bipartitions." from the gene name
+    gene_id=${gene_name#rooted_RAxML_bipartitions.}
+    # Remove the suffix "_hybpiper" from the gene name
+    gene_id=${gene_id%_hybpiper}
+    # Construct the alignment file path
+    alignment_file="$ALIGNMENTS_DIR/${gene_id}_aligned_rm.fasta"
+    # Check if the alignment file exists and copy it to the output directory, or print a warning if it doesn't exist
+    [[ -f "$alignment_file" ]] && cp "$alignment_file" "$ALIGNMENTS_OUTPUT_DIR1/" || echo "Warning: Alignment file for $gene_id not found."
+done < SortaDate_genes25
+echo "All specified alignment files have been copied to $ALIGNMENTS_OUTPUT_DIR1"
+# 100
+while IFS= read -r line; do
+    # Skip the header line
+    [[ "$line" == name* ]] && continue
+    # Extract the gene name from the first column
+    gene_name=$(echo "$line" | awk '{print $1}')
+    # Remove the prefix "rooted_RAxML_bipartitions." from the gene name
+    gene_id=${gene_name#rooted_RAxML_bipartitions.}
+    # Remove the suffix "_hybpiper" from the gene name
+    gene_id=${gene_id%_hybpiper}
+    # Construct the alignment file path
+    alignment_file="$ALIGNMENTS_DIR/${gene_id}_aligned_rm.fasta"
+    # Check if the alignment file exists and copy it to the output directory, or print a warning if it doesn't exist
+    [[ -f "$alignment_file" ]] && cp "$alignment_file" "$ALIGNMENTS_OUTPUT_DIR2/" || echo "Warning: Alignment file for $gene_id not found."
+done < SortaDate_genes100
+echo "All specified alignment files have been copied to $ALIGNMENTS_OUTPUT_DIR2"
+
+================================================================================
+6a. Phylogeny - ML concatenation: Gene Shopping (Paragone-PF)
+
+ “Gene shopping” is where phylogenomic dataset is winnowed to a set of genes with desirable properties.
+
+ Here we run SortaDate (Smith 2018) to select the 25 and 100 most informative loci base on the following criteria
+ 1. Gene trees were ﬁltered by their similarity to the species tree
+ 2. clock-likeness (as indicated by root-to-tip variance)
+ 3. tree length.
+
+ Paper: https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0197433
+ Github: 
+
+Approach implemented in Joyce 2023 (https://doi.org/10.3389/fpls.2023.1063174) and Zuntini 2024 (https://doi.org/10.1038/s41586-024-07324-0) for example. 
+
+SortaDate requires phyx, which is already installed. Run the following to install SortaDate into python virtual environment:
+# Load Python Module
+module load Python/3.9.6-GCCcore-11.2.0
+# Activate Virtual Environment
+source /home4/$USER/software/venvs/target_capture/bin/activate
+# Clone SortaDate Repository: Download the SortaDate package from GitHub
+git clone https://github.com/FePhyFoFum/SortaDate.git
+cd SortaDate
+# Check installation
+python src/get_var_length.py -h
+
+SortaDate has two input requirements:
+* a species tree topology must be provided 
+* individual gene trees must be rooted (this is typically performed using outgroups)
+
+This script is doing the following:
+1. Root gene trees 
+2. Run SortaDate to winnow down to the 25/100 most informative loci
+3. Extract alignments for the 25/100 loci 
+
+from /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/6_Phylogeny_ML/Paragone-PF run: 
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/geneshopping_paragonePF.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=1:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=1GB
+#SBATCH --job-name=SortaDate
+
+# Run this from 6_Phylogeny_ML/Paragone-PF
+
+# Directorues and paths
+# Update paths to match datasets 
+ALIGNMENTS_DIR="/scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/4_Alignments/Paragone/PF"
+SORTADATE_DIR="/scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/6_Phylogeny_ML/Paragone-PF/SortaDate"
+ALIGNMENTS_OUTPUT_DIR1="$SORTADATE_DIR/Alignments25"
+ALIGNMENTS_OUTPUT_DIR2="$SORTADATE_DIR/Alignments100"
+
+# Create output directory for the alignments (for Step 3)
+mkdir -p "$ALIGNMENTS_OUTPUT_DIR1"
+mkdir -p "$ALIGNMENTS_OUTPUT_DIR2"
+
+# Step 1. Root gene trees
+
+# load phyx 
+module load phyx/1.3-foss-2022a
+
+cd Rooted_gene_trees/
+
+# Root gene trees 
+# Be sure to update to correct path to match dataset! 
+# Update the outgroup as needed - Here we root between Asteraceae and Calyceraceae
+for file in ../../../5_Phylogeny_coalescent/Paragone/Gene_trees/PF/RAxML_bipartitions.*_paragonePF;
+do
+    filename=$(basename "$file")  # Extracting just the file name without the path
+    pxrr -t "$file" -g Calyceraceae_Calycera_crassifolia_ERR7618534,Calyceraceae_Boopis_anthemoides_ERR7618533,Calyceraceae_Acicarpha_tribuloides_ERR4180184 -o "rooted_${filename}" -s
+done
+
+# Step 2. Sorta date
+
+cd ../SortaDate/
+module load Python/3.9.6-GCCcore-11.2.0
+
+#2a. Get the tip-to-root variation with the get_var_length.py
+# get_var_length.py DIR [-h] [--flend FILEENDING] [--outg OUTGROUPS] [--loc PHYX_LOCATION] [--outf OUTF]
+
+python /home4/$USER/software/SortaDate/src/get_var_length.py ../Rooted_gene_trees/ --flend _paragonePF --outg Calyceraceae_Calycera_crassifolia_ERR7618534,Calyceraceae_Boopis_anthemoides_ERR7618533,Calyceraceae_Acicarpha_tribuloides_ERR4180184 --outf var_length
+
+#2b. Get the bipartition support with get_bp_genetrees.py
+# get_bp_genetrees.py [-h] [--flend FILEENDING] [--loc PHYX_LOCATION] [--outf OUTF] DIR SPECIESTREE
+# note here: species tree is wASTRAL with min at 0.33
+python /home4/$USER/software/SortaDate/src/get_bp_genetrees.py ../Rooted_gene_trees/ --flend _paragonePF ../../../5_Phylogeny_coalescent/Paragone/Species_tree/PF/Species_tree_paragonePF_wastral.tre --outf bp
+
+# Deal with problematic loci
+# Several loci pose problems for combing in the results: in var_length some loci are NA; in bp some loci are 0
+# We will filter out these loci in order for combine_results.py to run smoothly
+awk '/NA/ {print $1}' var_length > skipped_genes.txt
+awk 'NR==FNR {skipped[$1]; next} !($1 in skipped)' skipped_genes.txt var_length > var_length_filtered
+awk 'NR==FNR {skipped[$1]; next} !($1 in skipped)' skipped_genes.txt bp > bp_filtered
+
+#2c. Combine the results from these two runs with combine_results.py
+# combine_results.py [-h] [--outf OUTF] VAR BP
+python /home4/$USER/software/SortaDate/src/combine_results.py var_length_filtered bp_filtered --outf combined_results
+
+#2d. Sort and get the list of the good genes with get_good_genes.py
+# get_good_genes.py [-h] [--order ORDER] [--max MAX] [--outf OUTF] COMB
+# --order gives the sorting order, where 1=root-to-tip variance, 2=treelength, 3=bipartition 
+# 25 best loci
+python /home4/$USER/software/SortaDate/src/get_good_genes.py combined_results --max 25 --order 3,1,2 --outf SortaDate_genes25
+# 100 best loci
+python /home4/$USER/software/SortaDate/src/get_good_genes.py combined_results --max 100 --order 3,1,2 --outf SortaDate_genes100
+
+# Step 3. Extract loci alignments for the SortaDate loci
+# Copy alignment files of the best genes
+
+# 25
+while IFS= read -r line; do
+    # Skip the header line
+    [[ "$line" == name* ]] && continue
+
+    # Extract the gene name from the first column
+    gene_name=$(echo "$line" | awk '{print $1}')
+
+    # Remove the prefix "rooted_RAxML_bipartitions." from the gene name
+    gene_id=${gene_name#rooted_RAxML_bipartitions.}
+
+    # Remove the suffix "_paragonePF" from the gene name
+    gene_id=${gene_id%_paragonePF}
+
+    # Construct the alignment file path with ".selected_stripped.aln.trimmed.fasta" added to match alignment files
+    alignment_file="$ALIGNMENTS_DIR/${gene_id}.selected_stripped.aln.trimmed.fasta"
+
+    # Check if the alignment file exists and copy it to the output directory, or print a warning if it doesn't exist
+    [[ -f "$alignment_file" ]] && cp "$alignment_file" "$ALIGNMENTS_OUTPUT_DIR1/" || echo "Warning: Alignment file for $gene_id not found."
+
+done < SortaDate_genes25
+
+
+# 100
+while IFS= read -r line; do
+    # Skip the header line
+    [[ "$line" == name* ]] && continue
+
+    # Extract the gene name from the first column
+    gene_name=$(echo "$line" | awk '{print $1}')
+
+    # Remove the prefix "rooted_RAxML_bipartitions." from the gene name
+    gene_id=${gene_name#rooted_RAxML_bipartitions.}
+
+    # Remove the suffix "_paragonePF" from the gene name
+    gene_id=${gene_id%_paragonePF}
+
+    # Construct the alignment file path with ".selected_stripped.aln.trimmed.fasta" added to match alignment files
+    alignment_file="$ALIGNMENTS_DIR/${gene_id}.selected_stripped.aln.trimmed.fasta"
+
+    # Check if the alignment file exists and copy it to the output directory, or print a warning if it doesn't exist
+    [[ -f "$alignment_file" ]] && cp "$alignment_file" "$ALIGNMENTS_OUTPUT_DIR2/" || echo "Warning: Alignment file for $gene_id not found."
+
+done < SortaDate_genes100
+
+================================================================================
+6a. Phylogeny - ML concatenation: Gene Shopping (Paragone-MO)
+
+ “Gene shopping” is where phylogenomic dataset is winnowed to a set of genes with desirable properties.
+
+ Here we run SortaDate (Smith 2018) to select the 25 and 100 most informative loci base on the following criteria
+ 1. Gene trees were ﬁltered by their similarity to the species tree
+ 2. clock-likeness (as indicated by root-to-tip variance)
+ 3. tree length.
+
+ Paper: https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0197433
+ Github: 
+
+Approach implemented in Joyce 2023 (https://doi.org/10.3389/fpls.2023.1063174) and Zuntini 2024 (https://doi.org/10.1038/s41586-024-07324-0) for example. 
+
+SortaDate requires phyx, which is already installed. Run the following to install SortaDate into python virtual environment:
+# Load Python Module
+module load Python/3.9.6-GCCcore-11.2.0
+# Activate Virtual Environment
+source /home4/$USER/software/venvs/target_capture/bin/activate
+# Clone SortaDate Repository: Download the SortaDate package from GitHub
+git clone https://github.com/FePhyFoFum/SortaDate.git
+cd SortaDate
+# Check installation
+python src/get_var_length.py -h
+
+SortaDate has two input requirements:
+* a species tree topology must be provided 
+* individual gene trees must be rooted (this is typically performed using outgroups)
+
+This script is doing the following:
+1. Root gene trees 
+2. Run SortaDate to winnow down to the 25/100 most informative loci
+3. Extract alignments for the 25/100 loci 
+
+from /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/6_Phylogeny_ML/Paragone-MO run: 
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/geneshopping_paragoneMO.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=1:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=1GB
+#SBATCH --job-name=SortaDate
+
+# Run this from 6_Phylogeny_ML/Paragone-MO
+
+# Directorues and paths
+# Update paths to match datasets 
+ALIGNMENTS_DIR="/scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/4_Alignments/Paragone/MO"
+SORTADATE_DIR="/scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/6_Phylogeny_ML/Paragone-MO/SortaDate"
+ALIGNMENTS_OUTPUT_DIR1="$SORTADATE_DIR/Alignments25"
+ALIGNMENTS_OUTPUT_DIR2="$SORTADATE_DIR/Alignments100"
+
+# Create output directory for the alignments (for Step 3)
+mkdir -p "$ALIGNMENTS_OUTPUT_DIR1"
+mkdir -p "$ALIGNMENTS_OUTPUT_DIR2"
+
+# Step 1. Root gene trees
+
+# load phyx 
+module load phyx/1.3-foss-2022a
+
+cd Rooted_gene_trees/
+
+# Root gene trees 
+# Be sure to update to correct path to match dataset! 
+# Update the outgroup as needed - Here we root between Asteraceae and Calyceraceae
+for file in ../../../5_Phylogeny_coalescent/Paragone/Gene_trees/MO/RAxML_bipartitions.*_paragoneMO;
+do
+    filename=$(basename "$file")  # Extracting just the file name without the path
+    pxrr -t "$file" -g Calyceraceae_Calycera_crassifolia_ERR7618534,Calyceraceae_Boopis_anthemoides_ERR7618533,Calyceraceae_Acicarpha_tribuloides_ERR4180184 -o "rooted_${filename}" -s
+done
+
+# Step 2. Sorta date
+
+cd ../SortaDate/
+module load Python/3.9.6-GCCcore-11.2.0
+
+#2a. Get the tip-to-root variation with the get_var_length.py
+# get_var_length.py DIR [-h] [--flend FILEENDING] [--outg OUTGROUPS] [--loc PHYX_LOCATION] [--outf OUTF]
+
+python /home4/$USER/software/SortaDate/src/get_var_length.py ../Rooted_gene_trees/ --flend _paragoneMO --outg Calyceraceae_Calycera_crassifolia_ERR7618534,Calyceraceae_Boopis_anthemoides_ERR7618533,Calyceraceae_Acicarpha_tribuloides_ERR4180184 --outf var_length
+
+#2b. Get the bipartition support with get_bp_genetrees.py
+# get_bp_genetrees.py [-h] [--flend FILEENDING] [--loc PHYX_LOCATION] [--outf OUTF] DIR SPECIESTREE
+# note here: species tree is wASTRAL with min at 0.33
+python /home4/$USER/software/SortaDate/src/get_bp_genetrees.py ../Rooted_gene_trees/ --flend _paragoneMO ../../../5_Phylogeny_coalescent/Paragone/Species_tree/MO/Species_tree_paragoneMO_wastral.tre --outf bp
+
+# Deal with problematic loci
+# Several loci pose problems for combing in the results: in var_length some loci are NA; in bp some loci are 0
+# We will filter out these loci in order for combine_results.py to run smoothly
+awk '/NA/ {print $1}' var_length > skipped_genes.txt
+awk 'NR==FNR {skipped[$1]; next} !($1 in skipped)' skipped_genes.txt var_length > var_length_filtered
+awk 'NR==FNR {skipped[$1]; next} !($1 in skipped)' skipped_genes.txt bp > bp_filtered
+
+#2c. Combine the results from these two runs with combine_results.py
+# combine_results.py [-h] [--outf OUTF] VAR BP
+python /home4/$USER/software/SortaDate/src/combine_results.py var_length_filtered bp_filtered --outf combined_results
+
+#2d. Sort and get the list of the good genes with get_good_genes.py
+# get_good_genes.py [-h] [--order ORDER] [--max MAX] [--outf OUTF] COMB
+# --order gives the sorting order, where 1=root-to-tip variance, 2=treelength, 3=bipartition 
+# 25 best loci
+python /home4/$USER/software/SortaDate/src/get_good_genes.py combined_results --max 25 --order 3,1,2 --outf SortaDate_genes25
+# 100 best loci
+python /home4/$USER/software/SortaDate/src/get_good_genes.py combined_results --max 100 --order 3,1,2 --outf SortaDate_genes100
+
+# Step 3. Extract loci alignments for the SortaDate loci
+# Copy alignment files of the best genes
+
+# 25
+while IFS= read -r line; do
+    # Skip the header line
+    [[ "$line" == name* ]] && continue
+
+    # Extract the gene name from the first column
+    gene_name=$(echo "$line" | awk '{print $1}')
+
+    # Remove the prefix "rooted_RAxML_bipartitions." from the gene name
+    gene_id=${gene_name#rooted_RAxML_bipartitions.}
+
+    # Remove the suffix "_paragoneMO" from the gene name
+    gene_id=${gene_id%_paragoneMO}
+
+    # Construct the alignment file path with ".selected_stripped.aln.trimmed.fasta" added to match alignment files
+    alignment_file="$ALIGNMENTS_DIR/${gene_id}.selected_stripped.aln.trimmed.fasta"
+
+    # Check if the alignment file exists and copy it to the output directory, or print a warning if it doesn't exist
+    [[ -f "$alignment_file" ]] && cp "$alignment_file" "$ALIGNMENTS_OUTPUT_DIR1/" || echo "Warning: Alignment file for $gene_id not found."
+
+done < SortaDate_genes25
+
+
+# 100
+while IFS= read -r line; do
+    # Skip the header line
+    [[ "$line" == name* ]] && continue
+
+    # Extract the gene name from the first column
+    gene_name=$(echo "$line" | awk '{print $1}')
+
+    # Remove the prefix "rooted_RAxML_bipartitions." from the gene name
+    gene_id=${gene_name#rooted_RAxML_bipartitions.}
+
+    # Remove the suffix "_paragoneMO" from the gene name
+    gene_id=${gene_id%_paragoneMO}
+
+    # Construct the alignment file path with ".selected_stripped.aln.trimmed.fasta" added to match alignment files
+    alignment_file="$ALIGNMENTS_DIR/${gene_id}.selected_stripped.aln.trimmed.fasta"
+
+    # Check if the alignment file exists and copy it to the output directory, or print a warning if it doesn't exist
+    [[ -f "$alignment_file" ]] && cp "$alignment_file" "$ALIGNMENTS_OUTPUT_DIR2/" || echo "Warning: Alignment file for $gene_id not found."
+
+done < SortaDate_genes100
+
+================================================================================
+6b. Phylogeny - ML concatenation: Build phylogeny with RAxML (Hybpiper)
+
+Concatenate the alignments selected by SortaDate (25 and 100)
+Build ML phylogeny with RAxML 
+
+Run notes:
+* Run time: 2d22hr
+
+from /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/6_Phylogeny_ML/Hybpiper/Phylogeny_ML run: 
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/phylogeny_speciestree_ML_hybpiper.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=3-00:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=16
+#SBATCH --mem=50GB
+#SBATCH --cpus-per-task=2
+#SBATCH --job-name=phylogeny-ML_hybpiper
+#SBATCH --output=phylogeny-ML_hybpiper.out
+#SBATCH --error=phylogeny-ML_hybpiper.er
+
+# Run 6_Phylogeny_ML/Hybpiper/Phylogeny_ML
+
+# Step 1. Concatenate the alignmenst for loci selected with SortaDate
+
+# Load Python and activate the virtual environment with AMAS installed 
+module load Python/3.9.6-GCCcore-11.2.0
+source /home4/$USER/software/venvs/target_capture/bin/activate
+
+# Run AMAS to concatenate the alignments
+# 25
+python3 /home4/$USER/software/venvs/target_capture/lib/python3.9/site-packages/amas/AMAS.py concat \
+    --in-files ../SortaDate/Alignments25/*_aligned_rm.fasta \
+    --in-format fasta \
+    --data-type dna \
+    --part-format raxml \
+    --concat-out concatenation_hybpiper25.fasta \
+    --concat-part partitions_hybpiper25.txt \
+    --out-format fasta
+# 100
+python3 /home4/$USER/software/venvs/target_capture/lib/python3.9/site-packages/amas/AMAS.py concat \
+    --in-files ../SortaDate/Alignments100/*_aligned_rm.fasta \
+    --in-format fasta \
+    --data-type dna \
+    --part-format raxml \
+    --concat-out concatenation_hybpiper100.fasta \
+    --concat-part partitions_hybpiper100.txt \
+    --out-format fasta
+
+# Deactivate the virtual environment
+deactivate
+
+# Step 2. Build ML phylogeny with concatenated matrix
+
+# Load RAxML with AVX2 support
+module load RAxML/8.2.12-gompi-2021b-hybrid-avx2
+
+# Run RAxML with optimizations and checkpointing
+# 25
+raxmlHPC-HYBRID-AVX2 -f a \
+    -s concatenation_hybpiper25.fasta \
+    -n phylogeny_ML_hybpiper25 \
+    -m GTRGAMMA \
+    -T 16 \
+    -N 1000 \
+    -k \
+    -x 12345 \
+    -p 67890 \
+    -q partitions_hybpiper25.txt \
+    -C checkpoint_file25
+# 100
+raxmlHPC-HYBRID-AVX2 -f a \
+    -s concatenation_hybpiper100.fasta \
+    -n phylogeny_ML_hybpiper100 \
+    -m GTRGAMMA \
+    -T 16 \
+    -N 1000 \
+    -k \
+    -x 12345 \
+    -p 67890 \
+    -q partitions_hybpiper100.txt \
+    -C checkpoint_file100
+
+# Notes on the parameters
+# -s [sequence file]
+# -n [output file name]
+# -m [substitution model][GTRCAT for faster analysis]
+# -f a [bootstrap search and ML search in one analysis]
+# -N autoMRE [automatically determine the number of bootstraps needed]
+# -x [random seed for bootstrap]
+# -p [random seed for parsimony inferences]
+# -T [number of threads, set to available cores]
+# -k [enables rapid bootstrap analysis]
+# -q [file with the partitions]
+# -C [checkpoint file name] to enable checkpointing
+
+================================================================================
+6b. Phylogeny - ML concatenation: Build phylogeny with RAxML (Paragone-PF)
+
+Concatenate the alignments selected by SortaDate (100)
+Build ML phylogeny with RAxML 
+
+Run notes:
+* Run time: X
+
+from /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/6_Phylogeny_ML/Paragone-PF/Phylogeny_ML run: 
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/phylogeny_speciestree_ML_paragonePF.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=4-00:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=16
+#SBATCH --mem=50GB
+#SBATCH --cpus-per-task=2
+#SBATCH --job-name=phylogeny-ML_paragonePF
+#SBATCH --output=phylogeny-ML_paragonePF.out
+#SBATCH --error=phylogeny-ML_paragonePF.er
+
+# Run 6_Phylogeny_ML/Paragone-PF/Phylogeny_ML
+
+# Step 1. Concatenate the alignmenst for loci selected with SortaDate
+
+# Load Python and activate the virtual environment with AMAS installed 
+module load Python/3.9.6-GCCcore-11.2.0
+source /home4/$USER/software/venvs/target_capture/bin/activate
+
+# Run AMAS to concatenate the alignments
+# 25
+#python3 /home4/$USER/software/venvs/target_capture/lib/python3.9/site-packages/amas/AMAS.py concat \
+#    --in-files ../SortaDate/Alignments25/*.fasta \
+#    --in-format fasta \
+#    --data-type dna \
+#    --part-format raxml \
+#    --concat-out concatenation_paragonePF_25.fasta \
+#    --concat-part partitions_paragonePF_25.txt \
+#    --out-format fasta
+# 100
+python3 /home4/$USER/software/venvs/target_capture/lib/python3.9/site-packages/amas/AMAS.py concat \
+    --in-files ../SortaDate/Alignments100/*.fasta \
+    --in-format fasta \
+    --data-type dna \
+    --part-format raxml \
+    --concat-out concatenation_paragonePF_100.fasta \
+    --concat-part partitions_paragonePF_100.txt \
+    --out-format fasta
+
+# Deactivate the virtual environment
+deactivate
+
+# Step 2. Build ML phylogeny with concatenated matrix
+
+# Load RAxML with AVX2 support
+module load RAxML/8.2.12-gompi-2021b-hybrid-avx2
+
+# Run RAxML with optimizations and checkpointing
+# 25
+#raxmlHPC-HYBRID-AVX2 -f a \
+#    -s concatenation_paragonePF_25.fasta \
+#    -n phylogeny_ML_paragonePF_25 \
+#    -m GTRGAMMA \
+#    -T 16 \
+#    -N 1000 \
+#    -k \
+#    -x 12345 \
+#    -p 67890 \
+#    -q partitions_paragonePF_25.txt \
+#    -C checkpoint_file25
+
+# 100
+raxmlHPC-HYBRID-AVX2 -f a \
+    -s concatenation_paragonePF_100.fasta \
+    -n phylogeny_ML_paragonePF_100 \
+    -m GTRGAMMA \
+    -T 16 \
+    -N 1000 \
+    -k \
+    -x 12345 \
+    -p 67890 \
+    -q partitions_paragonePF_100.txt \
+    -C checkpoint_file100
+
+# Notes on the parameters
+# -s [sequence file]
+# -n [output file name]
+# -m [substitution model][GTRCAT for faster analysis]
+# -f a [bootstrap search and ML search in one analysis]
+# -N autoMRE [automatically determine the number of bootstraps needed]
+# -x [random seed for bootstrap]
+# -p [random seed for parsimony inferences]
+# -T [number of threads, set to available cores]
+# -k [enables rapid bootstrap analysis]
+# -q [file with the partitions]
+# -C [checkpoint file name] to enable checkpointing
+
+================================================================================
+6b. Phylogeny - ML concatenation: Build phylogeny with RAxML (Paragone-MO)
+
+Concatenate the alignments selected by SortaDate (100)
+Build ML phylogeny with RAxML 
+
+Run notes:
+* Run time: X
+
+from /scratch/$USER/Hawaii_Mascarenes_Asteraceae/data/6_Phylogeny_ML/Paragone-MO/Phylogeny_ML run: 
+sbatch /scratch/$USER/Hawaii_Mascarenes_Asteraceae/scripts/phylogeny_speciestree_ML_paragoneMO.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=4-00:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=16
+#SBATCH --mem=50GB
+#SBATCH --cpus-per-task=2
+#SBATCH --job-name=phylogeny-ML_paragoneMO
+#SBATCH --output=phylogeny-ML_paragoneMO.out
+#SBATCH --error=phylogeny-ML_paragoneMO.er
+
+# Run 6_Phylogeny_ML/Paragone-MO/Phylogeny_ML
+
+# Step 1. Concatenate the alignmenst for loci selected with SortaDate
+
+# Load Python and activate the virtual environment with AMAS installed 
+module load Python/3.9.6-GCCcore-11.2.0
+source /home4/$USER/software/venvs/target_capture/bin/activate
+
+# Run AMAS to concatenate the alignments
+# 25
+#python3 /home4/$USER/software/venvs/target_capture/lib/python3.9/site-packages/amas/AMAS.py concat \
+#    --in-files ../SortaDate/Alignments25/*.fasta \
+#    --in-format fasta \
+#    --data-type dna \
+#    --part-format raxml \
+#    --concat-out concatenation_paragoneMO_25.fasta \
+#    --concat-part partitions_paragoneMO_25.txt \
+#    --out-format fasta
+# 100
+python3 /home4/$USER/software/venvs/target_capture/lib/python3.9/site-packages/amas/AMAS.py concat \
+    --in-files ../SortaDate/Alignments100/*.fasta \
+    --in-format fasta \
+    --data-type dna \
+    --part-format raxml \
+    --concat-out concatenation_paragoneMO_100.fasta \
+    --concat-part partitions_paragoneMO_100.txt \
+    --out-format fasta
+
+# Deactivate the virtual environment
+deactivate
+
+# Step 2. Build ML phylogeny with concatenated matrix
+
+# Load RAxML with AVX2 support
+module load RAxML/8.2.12-gompi-2021b-hybrid-avx2
+
+# Run RAxML with optimizations and checkpointing
+# 25
+#raxmlHPC-HYBRID-AVX2 -f a \
+#    -s concatenation_paragoneMO_25.fasta \
+#    -n phylogeny_ML_paragoneMO_25 \
+#    -m GTRGAMMA \
+#    -T 16 \
+#    -N 1000 \
+#    -k \
+#    -x 12345 \
+#    -p 67890 \
+#    -q partitions_paragoneMO_25.txt \
+#    -C checkpoint_file25
+
+# 100
+raxmlHPC-HYBRID-AVX2 -f a \
+    -s concatenation_paragoneMO_100.fasta \
+    -n phylogeny_ML_paragoneMO_100 \
+    -m GTRGAMMA \
+    -T 16 \
+    -N 1000 \
+    -k \
+    -x 12345 \
+    -p 67890 \
+    -q partitions_paragoneMO_100.txt \
+    -C checkpoint_file100
+
+# Notes on the parameters
+# -s [sequence file]
+# -n [output file name]
+# -m [substitution model][GTRCAT for faster analysis]
+# -f a [bootstrap search and ML search in one analysis]
+# -N autoMRE [automatically determine the number of bootstraps needed]
+# -x [random seed for bootstrap]
+# -p [random seed for parsimony inferences]
+# -T [number of threads, set to available cores]
+# -k [enables rapid bootstrap analysis]
+# -q [file with the partitions]
+# -C [checkpoint file name] to enable checkpointing
+
+================================================================================
+7. Dated Phylogeny 
+
+Date ML trees with RelTime. 
+
+https://bmcgenomics.biomedcentral.com/articles/10.1186/s12864-022-09030-5
+https://academic.oup.com/gbe/article/10/6/1631/5034435
+https://academic.oup.com/mbe/article/35/7/1770/4947869
+
+For the Asteraceae-wide phylogeny we calibrated the tree with 10 fossils reviewed in Palazzesi et al. (2022) [https://doi.org/10.1093/botlinnean/boac032]
+- Fossil calibration database with notes and justification at /data/7_Dated_phylogeny
+
+RelTime is implemented in MEGA for Hybpiper, MO, PF maximum likelihood trees based on the a concatenated dataset of the 100 most informative loci
+
+Each dataset directory has the following:
+* Input ML tree 
+* Calibration file
+* Dated phylogeny 
+* MEGA session file 
+
+

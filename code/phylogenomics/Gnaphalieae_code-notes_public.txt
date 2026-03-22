@@ -1,0 +1,1656 @@
+=======================================================================
+Gnaphalieae: sub-project of the Hawaiian and Mascarenes Asteraceae island biogeography and community assembly 
+
+This document contains notes and code for the Gnaphalieae bioinformatics.
+
+Overview: This is a sub-run of the larger Hawaiian and Mascarenes Asteraceae project.
+Aim: Focused on understanding the Mascarenes Helichrysum endemics and Hawaii Pseudognaphalium endemics with more robust sampling
+
+Dataset: Gnaphalieae island-mainland samples sequenced with Comp1061 and angio353 + Gnaphalieae samples from Carme Blanco-Gavalda and Merce Galbany Casals sequenced with Comp1061
+
+Key details: 
+* 21 new island and main Gnaphalieae samples (Target capture with Angio353+Comp1061 - map only to Comp1061 here)
+* 248 [222 round1 + 26 round2] Gnaphalieae samples (Comp1061)
+
+Overview of the directory project structure:
+/Gnaphalieae
+   /scripts
+   /data
+      /namelists
+         namelist_island.txt (Gnaphalieae island+mainland samples)
+         namelist_carme1.txt (first round of Gnaphalieae samples)
+         namelist_carme2.txt (second round of Gnaphalieae samples)
+         namelist_islands_carme.txt (all Lizzies island+mainland samples AND all Carmes Gnaphalieae samples)
+      /target_files
+         comp1061_hybpiper_reference_fixed.fasta (improved comp1061)
+      /0_raw_sequences
+         /Gnaphalieae_islands
+         /Gnaphalieae_Carme1
+         /Gnaphalieae_Carme2
+      /1_trimmed
+         /paired
+         /unpaired
+      /2_Hybpiper
+      /2_Hybpiper_summary
+      /2_Hybpiper_sequences
+      /2_Hybpiper_paralogs
+      /3_Paralogy_resolution
+      /4_Alignments
+         /Hybpiper
+         /Paralogs
+         /Paragone
+            /PF
+            /MO
+      /5_Phylogeny_coalescent
+         /Hybpiper
+            /Gene_trees
+            /Species_tree
+         /Paralogs
+            /Gene_trees
+            /Species_tree
+         /Paragone
+            /Gene_trees
+               /PF
+               /MO
+            /Species_tree
+               /PF
+               /MO
+
+================================================================================
+Step 1: Trim and clean the reads
+
+For each of the 3 datesets (Gnaphalieae_islands, Gnaphalieae_Carme1, Gnaphalieae_Carme2), run trim through Hybpiper assembly seperately. 
+
+A few things are happening in this script:
+* making a new 1_trimmed directory (if needed)
+* copying the raw files to the trimmed folder to do the work there
+* change the file ending, I want to end up with *R1/2.fastq.gz so I need to remove everything until that
+* unzip the files
+* run trimmomatic on each sample
+* organize the resulting samples: move sequences into paired and unpaired directories, and make a new dir for the unzipped sequences for reference
+
+Code tips: 
+* to check the unique file endings for the raw sequences, use: find . -type f -name '*_001_*.fastq.gz' | awk -F"_001_" '{print $2}' | sort -u
+
+Notice: the unzipped trimmed reads take up a lot of storage. So after reads are assembled/mapped with Hybpiper delete from 1_trimmed from cluster and dont back up (easy to rerun if needed)
+
+--------------------------------------------------------------------------------
+# Trim Gnaphalieae_islands
+
+Notes on run: 
+* wall time for 21 samples approx 2 hrs
+* max mem 150 Mb
+* this step requires a lot of available storage due to the unzipping
+
+form /scratch/$USER/Gnaphalieae/data/0_raw_sequences/Gnaphalieae_islands run:
+sbatch /scratch/$USER/Gnaphalieae/scripts/trimming.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=2-00:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=6GB
+#SBATCH --job-name=trimmomatic_batch_islands
+
+# Start: Run this from the 0_raw_sequences/Gnaphalieae_islands directory
+
+# Copy all the files into the trimmed reads directory
+mkdir -p ../../1_trimmed/
+cp *.filt.fastq.gz ../../1_trimmed/
+
+# move into the trimmed reads directory
+cd ../../1_trimmed/
+
+# remove the filter extension (.filt.)
+rename _001_AHGTCYDMXY.filt.fastq.gz .fastq.gz *_001_AHGTCYDMXY.filt.fastq.gz
+rename _001_AHNC5FDSX7.filt.fastq.gz .fastq.gz *_001_AHNC5FDSX7.filt.fastq.gz
+rename _001_AHNNH2DMXY.filt.fastq.gz .fastq.gz *_001_AHNNH2DMXY.filt.fastq.gz
+rename _001_AHWGF5DSX7.filt.fastq.gz .fastq.gz *_001_AHWGF5DSX7.filt.fastq.gz
+rename _001_BHT35KDRX2.filt.fastq.gz .fastq.gz *_001_BHT35KDRX2.filt.fastq.gz
+rename _001_BHW5NHDSX7.filt.fastq.gz .fastq.gz *_001_BHW5NHDSX7.filt.fastq.gz
+rename _001_BHWGWCDSX7.filt.fastq.gz .fastq.gz *_001_BHWGWCDSX7.filt.fastq.gz
+# This is updated to the run specific file name, but generalized command:
+# rename .filt.fastq.gz .fastq.gz *.filt.fastq.gz
+
+# unzip the zipped sequence files
+for zip in *.fastq.gz; do
+    gunzip "$zip"
+done
+
+# Create paired and unpaired directories
+mkdir -p paired unpaired
+
+# load trimmomatic
+module load Trimmomatic
+
+# run trimmomatic
+Total=$(ls *_R1.fastq | wc -l)
+
+for i in $(eval echo {1..$Total}); do
+    seq1=$(ls *_R1.fastq | head -n $i | tail -1)
+    seq2=$(echo $seq1 | sed 's/_R1/_R2/g')
+    name=$(basename $seq1 _R1.fastq)
+    
+    java -jar $EBROOTTRIMMOMATIC/trimmomatic-0.39.jar PE -threads 4 -trimlog Trimlog.txt $seq1 $seq2 \
+        ${name}_1P.fastq ${name}_1U.fastq \
+        ${name}_2P.fastq ${name}_2U.fastq \
+        ILLUMINACLIP:$EBROOTTRIMMOMATIC/adapters/TruSeq3-PE-2.fa:2:30:10:2:true LEADING:10 TRAILING:10 SLIDINGWINDOW:4:20 MINLEN:40
+
+    # Move the trimmed files to the appropriate folders
+    mv ${name}_1P.fastq paired/
+    mv ${name}_2P.fastq paired/
+    mv ${name}_1U.fastq unpaired/
+    mv ${name}_2U.fastq unpaired/
+
+    # Delete unnecessary files to free up storage space
+    rm ${name}_R*.fastq
+done
+
+--------------------------------------------------------------------------------
+# Trim Gnaphalieae_CarmeX (code for Carme1 and Carme2)
+
+Notes on Carme1 run: 
+* wall time for 222 samples approx 14hrs
+* max mem 200 Mb
+* this step requires a lot of available storage due to the unzipping
+
+Notes on Carme2 run: 
+
+form /scratch/$USER/Gnaphalieae/data/0_raw_sequences/Gnaphalieae_CarmeX run:
+sbatch /scratch/$USER/Gnaphalieae/scripts/trimming_carme.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=2-00:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=6GB
+#SBATCH --job-name=trimmomatic_batch_carme
+
+# Start: Run this from the 0_raw_sequences/Gnaphalieae_carme directory
+
+# Copy all the files into the trimmed reads directory
+mkdir -p ../../1_trimmed/
+cp *.fastq.gz ../../1_trimmed/
+
+# move into the trimmed reads directory
+cd ../../1_trimmed/
+
+# remove the extension (_001)
+rename _001.fastq.gz .fastq.gz *_001.fastq.gz
+
+# unzip the zipped sequence files
+for zip in *.fastq.gz; do
+    gunzip "$zip"
+done
+
+# Create paired and unpaired directories
+mkdir -p paired unpaired
+
+# load trimmomatic
+module load Trimmomatic
+
+# run trimmomatic
+Total=$(ls *_R1.fastq | wc -l)
+
+for i in $(eval echo {1..$Total}); do
+    seq1=$(ls *_R1.fastq | head -n $i | tail -1)
+    seq2=$(echo $seq1 | sed 's/_R1/_R2/g')
+    name=$(basename $seq1 _R1.fastq)
+    
+    java -jar $EBROOTTRIMMOMATIC/trimmomatic-0.39.jar PE -threads 4 -trimlog Trimlog.txt $seq1 $seq2 \
+        ${name}_1P.fastq ${name}_1U.fastq \
+        ${name}_2P.fastq ${name}_2U.fastq \
+        ILLUMINACLIP:$EBROOTTRIMMOMATIC/adapters/TruSeq3-PE-2.fa:2:30:10:2:true LEADING:10 TRAILING:10 SLIDINGWINDOW:4:20 MINLEN:40
+
+    # Move the trimmed files to the appropriate folders
+    mv ${name}_1P.fastq paired/
+    mv ${name}_2P.fastq paired/
+    mv ${name}_1U.fastq unpaired/
+    mv ${name}_2U.fastq unpaired/
+
+    # Delete unnecessary files to free up storage space
+    rm ${name}_R*.fastq
+done
+
+================================================================================
+Step 2a: Hybpiper assemble/map reads
+
+Resources and references:
+* https://github.com/mossmatters/HybPiper/wiki/
+* https://bsapubs.onlinelibrary.wiley.com/doi/10.3732/apps.1600016
+* https://github.com/sidonieB/bioinfo-utils/blob/master/docs/advice/target_capture_data_analysis.md
+
+Changes and improvements since earlier runs: 
+1. Updated the target files to be taxon specific and fixed issues (ie stop codons and reading frame) (see Chris Jackson Github and above code)
+2. Run BLASTx, instead of BWA in assemble step (see https://github.com/mossmatters/HybPiper/wiki/Troubleshooting,-common-issues,-and-recommendations#20-read-mapping)
+
+Code tip: To create the namelist.txt from the trimmed paired reads directory, run the following:
+ls *_1P.fastq *_2P.fastq | awk -F"_[12]P.fastq" '{print $1}' | sort -u > ../../namelists/namelist.txt
+ls *_1P.fastq *_2P.fastq | awk -F"_[12]P.fastq" '{print $1}' | sort -u > ../../namelists/namelist_carme1.txt
+ls *_1P.fastq *_2P.fastq | awk -F"_[12]P.fastq" '{print $1}' | sort -u > ../../namelists/namelist_carme1b.txt
+ls *_1P.fastq *_2P.fastq | awk -F"_[12]P.fastq" '{print $1}' | sort -u > ../../namelists/namelist_carme1c.txt
+ls *_1P.fastq *_2P.fastq | awk -F"_[12]P.fastq" '{print $1}' | sort -u > ../../namelists/namelist_carme2.txt
+
+--------------------------------------------------------------------------------
+# Hybpiper assemble Gnaphalieae island samples
+
+Notes on run: 
+* wall time for 21 samples approx 18hrs
+* max mem 7Gb 
+
+form /scratch/$USER/Gnaphalieae/data/2_Hybpiper run:
+sbatch /scratch/$USER/Gnaphalieae/scripts/hybpiper_assemble_islands.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+#SBATCH --job-name=HybPiper_array_Gnaphalieae_islands
+#SBATCH --time=5-00:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=2
+#SBATCH --mem=30GB
+#SBATCH --output=HybP_%A_%a.out
+#SBATCH --error=HybP_%A_%a.error
+#SBATCH --array=1-21
+ulimit -n 16384
+
+# Remember to specify the array range to match the number of samples/namelist
+# Remember to update the path to the correct name list
+
+# Run this script from the 2_Hybpiper folder
+
+# load HybPiper2 module
+module load MAFFT
+module load Hybpiper/2.1.6-foss-2022b
+
+# run HybPiper 
+# note: can also run from cd $TMPDIR but it takes longer because of the speed for reading/writing directories to disk
+cd /dev/shm/
+
+#Use the array's index to read the file with names into the $samplename variable
+samplename=$(sed -n "$SLURM_ARRAY_TASK_ID"p /scratch/$USER/Gnaphalieae/data/namelists/namelist_islands.txt)
+
+hybpiper assemble \
+   -r "/scratch/$USER/Gnaphalieae/data/1_trimmed/paired/${samplename}_1P.fastq" \
+   "/scratch/$USER/Gnaphalieae/data/1_trimmed/paired/${samplename}_2P.fastq" \
+   -t_dna /scratch/$USER/Gnaphalieae/data/target_files/comp1061_hybpiper_reference_fixed.fasta \
+   --prefix $samplename \
+   --cpu $SLURM_TASKS_PER_NODE
+python $HOME/software/HybPiper/cleanup.py $samplename
+# cp -r $samplename /scratch/$USER/Gnaphalieae/data/2_Hybpiper/$samplename
+# zip the files before copying to /scratch to stay within resources quoata
+tar cf /scratch/$USER/Gnaphalieae/data/2_Hybpiper/$samplename.tar $samplename
+rm -r $samplename
+
+# Note: set the hybpiper cpu flag to use the number of tasks reported by Slurm for the job as a parameter. This prevents OOM errors
+
+--------------------------------------------------------------------------------
+# Hybpiper assemble Gnaphalieae island samples
+
+Notes on run: 
+* wall time for X samples approx XdXhrs
+* max mem X 
+
+form /scratch/$USER/Gnaphalieae/data/2_Hybpiper run:
+sbatch /scratch/$USER/Gnaphalieae/scripts/hybpiper_assemble_carme.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+#SBATCH --job-name=HybPiper_array_Gnaphalieae_carme1
+#SBATCH --time=5-00:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=2
+#SBATCH --mem=30GB
+#SBATCH --output=HybP_%A_%a.out
+#SBATCH --error=HybP_%A_%a.error
+#SBATCH --array=1-222
+ulimit -n 16384
+
+# Remember to specify the array range to match the number of samples/namelist
+# Remember to update the path to the correct name list
+
+# Run this script from the 2_Hybpiper folder
+
+# load HybPiper2 module
+module load MAFFT
+module load Hybpiper/2.1.6-foss-2022b
+
+# run HybPiper 
+# note: can also run from cd $TMPDIR but it takes longer because of the speed for reading/writing directories to disk
+cd /dev/shm/
+
+#Use the array's index to read the file with names into the $samplename variable
+samplename=$(sed -n "$SLURM_ARRAY_TASK_ID"p /scratch/$USER/Gnaphalieae/data/namelists/namelist_carme1.txt)
+
+hybpiper assemble \
+   -r "/scratch/$USER/Gnaphalieae/data/1_trimmed/paired/${samplename}_1P.fastq" \
+   "/scratch/$USER/Gnaphalieae/data/1_trimmed/paired/${samplename}_2P.fastq" \
+   -t_dna /scratch/$USER/Gnaphalieae/data/target_files/comp1061_hybpiper_reference_fixed.fasta \
+   --prefix $samplename \
+   --cpu $SLURM_TASKS_PER_NODE
+python $HOME/software/HybPiper/cleanup.py $samplename
+# cp -r $samplename /scratch/$USER/Gnaphalieae/data/2_Hybpiper/$samplename
+# zip the files before copying to /scratch to stay within resources quoata
+tar cf /scratch/$USER/Gnaphalieae/data/2_Hybpiper/$samplename.tar $samplename
+rm -r $samplename
+
+# Note: set the hybpiper cpu flag to use the number of tasks reported by Slurm for the job as a parameter. This prevents OOM errors
+
+================================================================================
+Step 2b: Get summary stats from Hybpiper 
+
+Get summary stats pre-filtering.
+
+mkdir data/2_Hybpiper_summary
+
+Breakdown of the script:
+* datadir=$PWD stores the location to the Hybpiper data (so run this script from the 2_Hybpiper directory)
+* Change current working directory to local disk ($TMPDIR) in compute node for faster processing  
+* For loop to extract Hybpiper tar files to $TMPDIR. 
+   * First line in loop interates of all the .tar files in the "datadir" directory (ie 2_Hybpiper)
+   * "tar xf $datadir/$samplename.tar" extracts the contents of the .tar file specified by $samplename to the current working directory ($TMPDIR)
+* Then we get the summary stats. 
+   * hybpiper stats command will then summarize target enrichment and gene recovery efficiency for a set of samples
+      * We need to supply the reference file used for mapping the reads. The file is located in the target_files directory, which is one level up from the current datadir directory.
+      * And specify the path to the namelist.txt file that contains the names of the samples. The file is located in the directory one level up from datadir.
+   * hybpiper recovery_heatmap takes the sequence length table output of hybpiper stats and creates a figure to visualize the recovery efficiency. 
+   * Then copy the summary results back to /scratch in a new directory called 2_Hybpiper_summary
+
+Resources and references:
+* https://github.com/mossmatters/HybPiper/wiki#hybpiper-stats
+
+form /scratch/$USER/Gnaphalieae/data/2_Hybpiper run:
+sbatch /scratch/$USER/Gnaphalieae/scripts/hybpiper_summary_stats.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=2-00:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=20GB
+#SBATCH --job-name=hybpiper_summary_stats
+ulimit -n 16384
+
+# Run this script from the 2_Hybpiper folder
+
+# Store location of data
+datadir=$PWD
+
+# load HybPiper2 module
+module load MAFFT
+module load Hybpiper/2.1.6-foss-2022b
+
+# Change to local disk in compute node for faster processing
+cd $TMPDIR
+
+# Extract tar files to $TMPDIR
+for samplename in $datadir/*.tar; do
+  tar xf $samplename
+done
+
+# Summary stats
+
+# hybpiper stats command will then summarize target enrichment and gene recovery efficiency for a set of samples. We just need to supply the target file and namelist.
+hybpiper stats -t_dna $datadir/../target_files/comp1061_hybpiper_reference_fixed.fasta gene $datadir/../namelists/namelist_islands_carme1.txt --seq_lengths_filename seq_lengths_gnaphalieae1 --stats_filename hybpiper_stats_gnaphalieae1
+
+# This command takes the sequence length table output of hybpiper stats and creates a figure to visualize the recovery efficiency.
+hybpiper recovery_heatmap seq_lengths_gnaphalieae1.tsv --figure_length 40 --figure_height 15 --heatmap_filename recovery_heatmap_gnaphalieae1 --heatmap_filetype pdf
+# Note! Because there are so many loci with the comp1061, we need to set the figure dimensions for the plot to be produced.
+
+# copy back the results 
+cp *.pdf *.tsv $datadir/../2_Hybpiper_summary
+
+--------------------------------------------------------------------------------
+Review the sequence capture success:  
+
+Low Recovery (<100 loci at 75pct)
+1 Sample had low recovery (>100 loci at 75pct)
+* Pseudognaphalium_glandulosum_5CONC71838
+
+Keep all the samples and move forward. 
+
+================================================================================
+Step 2c: Retrieve Hybpiper sequences + Paralogs
+
+Breakdown of the script:
+* datadir=$PWD stores the location to the Hybpiper data (so run this script from the 2_Hybpiper directory)
+* Change current working directory to local disk ($TMPDIR) in compute node for faster processing  
+* For loop to extract Hybpiper tar files to $TMPDIR. 
+   * First line in loop interates of all the .tar files in the "datadir" directory (ie 2_Hybpiper)
+   * "tar xf $datadir/$samplename.tar" extracts the contents of the .tar file specified by $samplename to the current working directory ($TMPDIR)
+* The first main action of this script is to retrieve the sequences and store the .FNA files in a new directory called 2_Hybpiper_sequences 
+* Second, we want to retrieve the paralogs:
+   * Run hybpiper paralog_retriever 
+   * Copy all the paralog output files to 2_Hybpiper_paralogs 
+
+Resources and references:
+* https://github.com/mossmatters/HybPiper/wiki#hybpiper-retrieve_sequences
+* https://github.com/mossmatters/HybPiper/wiki/Paralogs
+
+form /scratch/$USER/Gnaphalieae/data/2_Hybpiper run:
+sbatch /scratch/$USER/Gnaphalieae/scripts/hybpiper_sequences_paralogs.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=2-00:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=20GB
+#SBATCH --job-name=hybpiper_retrieve_sequences_paralogs
+ulimit -n 16384
+
+# Run this script from the 2_Hybpiper folder
+
+# Store location of data
+datadir=$PWD
+
+# load HybPiper2 module
+module load MAFFT
+module load Hybpiper/2.1.6-foss-2022b
+
+# Change to local disk in compute node for faster processing
+cd $TMPDIR
+
+# Extract tar files to $TMPDIR
+for samplename in $datadir/*.tar; do
+  tar xf $samplename
+done
+
+# Retrieve sequences 
+
+# make the directory for the sequence outputs
+# -p flag creates a directory if doesnt exist, ignores if does
+mkdir -p $datadir/../2_Hybpiper_sequences
+
+# This command will get sequences recovered for the same gene from multiple samples and generates an unaligned multi-FASTA file for each gene.
+hybpiper retrieve_sequences dna -t_dna $datadir/../target_files/comp1061_hybpiper_reference_fixed.fasta --sample_names $datadir/../namelists/namelist_islands_carme.txt --fasta_dir $datadir/../2_Hybpiper_sequences
+# Note! Use the namelist_islandPAFTOL_filtered.txt based on review of summary stats
+
+# Recover paralogs 
+
+# Recover the coding sequences from alternative long paralogs 
+hybpiper paralog_retriever $datadir/../namelists/namelist_islands_carme.txt -t_dna $datadir/../target_files/comp1061_hybpiper_reference_fixed.fasta
+
+# Outputs include:
+# (1) a report that tabulates the number of sequences for each gene and sample (i.e. potential paralogs if > 1) 
+# (2) heatmap visualisation
+# (3) paralogs above threshold report
+# (4) folder containing paralogs (5) directory containing paralogs with putative chimeras removed
+
+# Copy all the paralog outputs back to the project directory in /scratch
+mkdir -p $datadir/../2_Hybpiper_paralogs 
+
+cp paralog_report.tsv $datadir/../2_Hybpiper_paralogs
+cp paralog_heatmap.png $datadir/../2_Hybpiper_paralogs
+cp paralogs_above_threshold_report.txt $datadir/../2_Hybpiper_paralogs
+cp -r paralogs_no_chimeras/ $datadir/../2_Hybpiper_paralogs
+cp -r paralogs_all/ $datadir/../2_Hybpiper_paralogs 
+
+================================================================================
+Step 2d: clean up sequence names
+
+Hybpiper2 appends information about the contigs (paralogs, depth) to the sample name in the multifasta files,
+This information can be leveraged in useful ways (ie Paragone). 
+However, when taking Hybpiper sequences forward on their own, we need to clean the names.
+This script changes in the sample names in the .FNA files by calling Qin´s python rename script. 
+So be sure the py script is in the script directory. 
+
+form /scratch/$USER/Gnaphalieae/data/2_Hybpiper_sequences run:
+sbatch /scratch/$USER/Gnaphalieae/scripts/hybpiper_sequences_namesclean.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=12:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=15GB
+#SBATCH --job-name=Hybpiper_sequences_rename
+
+# Run this from 2_Hybpiper_sequences
+
+# This script deals with the downstream problem of Hybpiper adding extra info to the sample names within each .FNA files
+# We call Qin's renaming python script and save the .FNA files with the cleaned names in /2_Hybpiper_sequences subfolder /2_Hybpiper_sequences/Hybpiper_sequences_namesclean
+
+module load Python/3.9.6-GCCcore-11.2.0
+
+# make names clean directory
+mkdir -p Hybpiper_sequences_namesclean
+
+# run name cleaning script
+for file in $(ls *.FNA); 
+do python3 /scratch/$USER/Gnaphalieae/scripts/rename_fastafile.py $file Hybpiper_sequences_namesclean/$file; 
+done
+
+================================================================================
+Step 3. Paralogy resolution (Paragone) 
+
+ParaGone is a Python package (with external dependencies) designed to identify ortholog groups from a set of paralog sequences from multiple taxa. This process has been decribed as both paralogy resolution and orthology inference. ParaGone implements multiple different algorithms to infer ortholog groups. These algorithms are applied to gene trees that contain paralogs, and ortholog groups are inferred based on algorithm-specific parsing of the tree topologies. The pipeline uses algorithms described and implemented by Yang and Smith 2014. These approaches have since been adapted for target capture datasets. (from github)
+
+Resources and references:
+* https://github.com/chrisjackson-pellicle/ParaGone
+* https://github.com/chrisjackson-pellicle/ParaGone/wiki/Tutorial
+* https://github.com/chrisjackson-pellicle/ParaGone/wiki
+* https://academic.oup.com/mbe/article/31/11/3081/2925722
+
+--------------------------------------------------------------------------------
+Step 3a. Install Paragone on Habrok 
+
+# from software directory on home create a new conda environment
+cd /home4/$USER/software
+module load Miniconda3/22.11.1-1
+conda create --name paragone
+
+# add conda channels 
+conda config --add channels defaults
+conda config --add channels bioconda
+conda config --add channels conda-forge
+
+# activate environment and install paragone 
+conda activate paragone
+conda install -c chrisjackson-pellicle paragone
+
+# check the install
+paragone --help
+
+# to load the paragone environment (for future use)
+module load Anaconda3/2023.03-1
+conda activate paragone
+# deactivate conda environment
+conda deactivate
+
+================================================================================
+Step 3b. Run Paragone 
+
+Runs Paragone in a single command. Uses IQtree to build trees.
+
+mkdir 3_Paralogy_resolution in Gnaphalieae/data/
+
+Run notes: 
+* Run time = Xhrs for c. X samples wiht 1061 loci
+* Remove flag --keep_intermediate_files, to NOT keep intermediate files (incase quota limits on habrok)
+* only run PF (MI) and MO - do not RUN RT
+
+form /scratch/$USER/Gnaphalieae/data/3_Paralogy_resolution run:
+sbatch /scratch/$USER/Gnaphalieae/scripts/paragone.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+#SBATCH --job-name=ParaGone
+#SBATCH --time=6-12:00:00
+#SBATCH --mem=25GB
+#SBATCH --cpus-per-task=10 
+
+# Run this script from the 3_Paralogy_resolution folder
+
+#Prepare the input data: make directory, copy outputs of Hybpiper paralog retriever (2_Hybpiper_paralogs/paralogs_all) to paragone inputs, remove any loci that have no reads
+mkdir paralog_input
+cp -r ../2_Hybpiper_paralogs/paralogs_all/. paralog_input
+find paralog_input/. -type f -size 0b -delete
+
+# Activate paragone conda environemt 
+module load Anaconda3/2023.03-1
+conda activate paragone
+
+# Run the full Paragone pipeline with a single command:
+paragone full_pipeline paralog_input --internal_outgroup Athrixia_phylicoides_R14373 --internal_outgroup Phagnalon_sordidum_GC2743 --internal_outgroup Leysera_gnaphalodes_R14525 --internal_outgroup Oedera_pungens_R14489 --pool 5 --threads 2 --mo --mi 
+# fasttree
+# paragone full_pipeline paralog_input --internal_outgroup sampleName --internal_outgroup sampleName --internal_outgroup sampleName --pool 5 --threads 2 --use_fasttree --mo --rt --mi
+
+================================================================================
+Step 4. Alignments 
+
+Organize and align loci under different Paralogy resolution:
+
+A. Hybpiper sequences (orthologs identified by Hybpiper)
+B. Paragone (paralogs resolved via ParaGone)
+   * Paragone
+      - PF 
+      - MO
+C. Paralogs (include/incorporate all paralogs)
+
+Step 4a: For the Hybpiper sequeneces we: align with MAFFT, filter and clean the alignments, and get summary stats. 
+
+Step 4b: Paragone outputs trimmed and aligned sequences under the different resolution algorithms. For the Paragone sequences, we copy the alignments into the 4_Alignments/Paragone directory and get the summary stats on all the different alignments. 
+
+Step 4c: For the paralog sequences we: clean the sequences names, align with MAFFT, filter and clean alignments, and get summary stats
+
+================================================================================
+Step 4a. Align and filter Hybpiper sequences
+
+To start, we will make a new directory for all the alignments: 4_Alignments 
+
+Use MAFFT with auto settings to align hybpiper sequences
+
+Then filter/cleanup the alignemnents 
+Specifically we are removing sites where more than 75% of the data is missing
+
+Finally, we get summary statistics on the alignments 
+
+Future improvements to alignment: 
+1. Optomize MAAFT settings
+2. Try a different alignment software, PASTA or UPP
+
+Future improvements to alignment cleaning: 
+1. Loci with a certain threshold of samples present (more important for concatenated trees)
+2. Loci with a minimum basepair length 
+
+form /scratch/$USER/Gnaphalieae/data/2_Hybpiper_sequences/Hybpiper_sequences_namesclean run:
+sbatch /scratch/$USER/Gnaphalieae/scripts/alignments_hybpiper_mafft.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=12:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=15GB
+#SBATCH --job-name=alignments_hybpiper_mafft
+
+# Run this from /2_Hybpiper_sequences/Hybpiper_sequences_namesclean directory 
+
+# make a new directory for the alignments
+mkdir -p ../../4_Alignments
+mkdir ../../4_Alignments/Hybpiper
+
+## Step 1. Align loci
+
+# Run MAFFt with the auto settings
+
+module load MAFFT/7.490-gompi-2021b-with-extensions
+
+for file in *.FNA;
+do
+mafft --auto "$file" > ../../4_Alignments/Hybpiper/"${file%.FNA}"_aligned.fasta
+done
+
+# note the ${var%pattern} removes the .FNA ending giving just the loci base name and adding the _aligned.fasta ending 
+
+# Remove any alignments that are empty
+cd ../../4_Alignments/Hybpiper
+find . -type f -size 0b -delete
+
+## Step 2. Filter/clean 
+
+# Remove alignment sites based on proportion of missing data (-p)
+
+# Load phyx 
+module load phyx/1.3-foss-2022a
+
+for file in *_aligned.fasta;
+do 
+pxclsq -s $file -o "${file%_aligned.fasta}"_aligned_rm.fasta -p 0.70
+done
+
+# -p [proportion of data required to be present]
+# here, 70% of the data required to be present by column, ie sites with >30% missing data removed
+
+# Delete the unfiltered alignments 
+rm *_aligned.fasta
+
+# Remove alignments that are empty 
+find . -type f -size 0b -delete
+
+## Step 3. Summary statistics on alignment
+
+# load python and activate virtual pyton environment with AMAS installed 
+module load Python/3.9.6-GCCcore-11.2.0
+source /home4/$USER/software/venvs/target_capture/bin/activate
+
+python3 /home4/$USER/software/venvs/target_capture/lib/python3.9/site-packages/amas/AMAS.py summary --in-files  *_aligned_rm.fasta --in-format fasta --data-type dna
+
+# deactivate virtual environment
+deactivate
+
+================================================================================
+Step 4b. Organize Paragone alignments 
+
+Organize the Paragone alignments 
+
+Paragone outputs the final alignments (filtered and trimmed) under two different paralogy resolution algorithms. 
+So we will make a new directory in the 4_Alignments folder for the paragone puts 
+mkdir 4_Alignments/Paragone
+mkdir 4_Alignments/Paragone/PF
+mkdir 4_Alignments/Paragone/MO
+
+- 26_MO_final_alignments_trimmed -> MO_final_alignments_trimmed 
+- 27_MI_final_alignments_trimmed -> PF_final_alignments_trimmed
+
+For MI we only want to select the paralog‐free loci, so we select all files labeled ‘1to1ortho’ from the results of the Maximum Inclusion (MI)
+Maximum Inclusion (MI) -> Paralog Free (PF)
+
+And get the summary statistics
+
+Notes after summary stats: 
+- PF: 278 loci; 156 average number of taxa; 291 bp average alignment length; 137 average number of variable sites
+- MO: 792 loci; 152 average number of taxa; 306 bp average alignment length; 136 average number of variable sites
+MO maximize dataset; while PF reduces loci dataset but strictly uses only loci with no paralogs
+
+form /scratch/$USER/Gnaphalieae/data/3_Paralogy_resolution run:
+sbatch /scratch/$USER/Gnaphalieae/scripts/alignments_paragone_organize.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=12:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=15GB
+#SBATCH --job-name=alignments_paragone_organize
+
+# Run from data/3_Paralogy_resolution/
+
+# 1. Copy Paragone outputs to new 4_Alignments directory
+
+# Make new Paragone directories and subdirectories if not present already
+
+mkdir -p ../4_Alignments/Paragone
+mkdir -p ../4_Alignments/Paragone/PF
+mkdir -p ../4_Alignments/Paragone/MO
+
+# Copy paragone alignments into 4_Alignments/Paragone
+cp -r ./26_MO_final_alignments_trimmed/* ../4_Alignments/Paragone/MO
+cp -r ./27_MI_final_alignments_trimmed/*1to1ortho* ../4_Alignments/Paragone/PF
+
+
+# 2. Summary statistics on alignment
+
+# load python and activate virtual pyton environment with AMAS installed 
+module load Python/3.9.6-GCCcore-11.2.0
+source /home4/$USER/software/venvs/target_capture/bin/activate
+
+# Get summary stats for each algorithm 
+
+# PF
+cd /scratch/$USER/Gnaphalieae/data/4_Alignments/Paragone/PF
+python3 /home4/$USER/software/venvs/target_capture/lib/python3.9/site-packages/amas/AMAS.py summary --in-files  *.fasta --in-format fasta --data-type dna
+
+# MO
+cd /scratch/$USER/Gnaphalieae/data/4_Alignments/Paragone/MO
+python3 /home4/$USER/software/venvs/target_capture/lib/python3.9/site-packages/amas/AMAS.py summary --in-files  *.fasta --in-format fasta --data-type dna
+
+deactivate
+
+================================================================================
+Step 4c. Clean, align, filter Paralog sequences
+
+To start, we will make a new directory for all the paralog alignments: 4_Alignments/Paralogs
+mkdir /4_Alignments/Paralogs
+
+Then run the script that goes through several key steps:
+
+1. Clean paralog sequence names and output into current directory. 
+2. Align loci with MAFFT in auto settings
+3. Filter/cleanup the alignemnents 
+   * Specifically we are removing sites where more than 75% of the data is missing
+4. Get summary statistics on alignment
+
+form /scratch/$USER/Gnaphalieae/data/4_Alignments/Paralogs run:
+sbatch /scratch/$USER/Gnaphalieae/scripts/alignments_paralogs.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=12:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=15GB
+#SBATCH --job-name=alignments_paralogs
+
+# Run this from 4_Alignments/Paralogs/
+
+# 1. Clean paralog sequence names and output into current directory (/4_Alignments/Paralogs/)
+# We call Qin's renaming python script for cleaning up the Hybpiper appended info onto the sequence names
+# This script splits the label at the space " " and keeps the paralog ids (.main, .0, etc) which we need to keep the paralog names unique for RAxML
+
+module load Python/3.9.6-GCCcore-11.2.0
+source /home4/$USER/software/venvs/target_capture/bin/activate
+
+for file in ../../2_Hybpiper_paralogs/paralogs_all/*.fasta; 
+do 
+  filename=$(basename $file) 
+  python3 /scratch/$USER/Gnaphalieae/scripts/rename_fastafile.py $file $filename; 
+done
+
+# 2. Align loci
+# Run MAFFt with the auto settings
+
+module load MAFFT/7.490-gompi-2021b-with-extensions
+
+for file in *.fasta;
+do
+  mafft --auto "$file" > "${file%.fasta}"_aligned.fasta
+done
+# note the ${var%pattern} removes the .fasta ending giving just the loci base name and adding the _aligned.fasta ending 
+
+# Remove the original unaligned paralogs_all.fasta files, leaving paralogs_all_aligned.fasta
+rm *paralogs_all.fasta
+# Remove any alignments that are empty
+find . -type f -size 0b -delete
+
+# 3. Filter/clean alignments
+# Remove alignment sites based on proportion of missing data (-p)
+
+# Load phyx 
+module load phyx/1.3-foss-2022a
+
+for file in *_aligned.fasta;
+do 
+pxclsq -s $file -o "${file%_aligned.fasta}"_aligned_rm.fasta -p 0.70
+done
+
+# -p [proportion of data required to be present]
+# here, 70% of the data required to be present by column, ie sites with >30% missing data removed
+
+# Delete the unfiltered alignments 
+rm *_aligned.fasta
+
+# Remove alignments that are empty 
+find . -type f -size 0b -delete
+
+## 4. Summary statistics on alignment
+
+python3 /home4/$USER/software/venvs/target_capture/lib/python3.9/site-packages/amas/AMAS.py summary --in-files  *_aligned_rm.fasta --in-format fasta --data-type dna
+
+# deactivate virtual environment
+deactivate
+
+================================================================================
+Step 5. Phylogeny - Coalescent
+
+Build gene trees for each loci and summaries species tree with ASTRAL
+
+Set up Phylogeny - coalescent directory structure:
+Where the gene trees and species tree are in seperate directories nested in the source folder (ie. Paragone, Hybpiper)
+
+# Main directory
+mkdir 5_Phylogeny_coalescent
+
+# Hybpiper
+mkdir 5_Phylogeny_coalescent/Hybpiper
+mkdir 5_Phylogeny_coalescent/Hybpiper/Gene_trees
+mkdir 5_Phylogeny_coalescent/Hybpiper/Species_tree
+
+# Paragone
+mkdir 5_Phylogeny_coalescent/Paragone
+mkdir 5_Phylogeny_coalescent/Paragone/Gene_trees
+mkdir 5_Phylogeny_coalescent/Paragone/Gene_trees/PF
+mkdir 5_Phylogeny_coalescent/Paragone/Gene_trees/MO
+mkdir 5_Phylogeny_coalescent/Paragone/Species_tree
+mkdir 5_Phylogeny_coalescent/Paragone/Species_tree/PF
+mkdir 5_Phylogeny_coalescent/Paragone/Species_tree/MO
+
+# Paralogs
+mkdir 5_Phylogeny_coalescent/Paralogs
+mkdir 5_Phylogeny_coalescent/Paralogs/Gene_trees
+mkdir 5_Phylogeny_coalescent/Paralogs/Species_tree
+
+================================================================================
+Step 5a. Build gene trees for each loci alignment (Hybpiper)
+
+Build gene trees for each loci alignment generated with the raw hybpiper sequences. 
+
+The more loci and more samples included in the project greatly increase run time, making a simple loop not the most efficient or cost effective way to build the individual gene trees. 
+
+So we set the job up as an array. 
+There are a couple small but important considerations:
+* RAxML will often add a .fasta.reduced file back to the alignment directory, so the safest strategy is to define the alignment paths and files for a given dataset to a txt file right from the start and use this in the array
+* Habrok has a limit of 1000 active jobs per user, so we will run the loci in two seperate batches 
+
+The work flow: 
+1. Create text that lists the path and file of all the alignments in a given dataset (i.e. Hybiper)
+2. Run array batch 1
+3. Run array batch 2
+4. Check how all the jobs in the array performed 
+
+--------------------------------------------------------------------------------
+# 1 Generate lists 
+
+First, Generate an alignments text file that 
+
+On the terminal, form /scratch/$USER/Gnaphalieae/data/5_Phylogeny_coalescent/Hybpiper/Gene_trees
+Run: ls /scratch/$USER/Gnaphalieae/data/4_Alignments/Hybpiper/*_aligned_rm.fasta > alignments.txt
+
+This creates a text file with the file path and alignment file.
+
+The alignments file looks like:
+head -n 2 alignments.txt
+/scratch/$USER/Gnaphalieae/data/4_Alignments/Hybpiper/At1g01050_aligned_rm.fasta
+/scratch/$USER/Gnaphalieae/data/4_Alignments/Hybpiper/At1g01470_aligned_rm.fasta
+
+Count how many alignments in the dataset, this will be the array length:
+wc -l alignments.txt
+1038
+
+--------------------------------------------------------------------------------
+# 2-3 Build gene trees 
+
+Run array batch 1
+
+First batch are loci 1-900.
+
+form /scratch/$USER/Gnaphalieae/data/5_Phylogeny_coalescent/Hybpiper/Gene_trees run:
+sbatch /scratch/$USER/Gnaphalieae/scripts/phylogeny_genetrees_hybpiper_array1.sh
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#!/bin/bash
+
+#SBATCH --time=03:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=8
+#SBATCH --mem=8GB
+#SBATCH --cpus-per-task=1
+#SBATCH --job-name=gene_trees_hybpiper_array1
+#SBATCH --array=1-900
+
+# Run this from directory: 5_Phylogeny_coalescent/Hybpiper/Gene_trees
+# Note: Habrok limit of 1000 jobs at one time, so need to split array into 2 and run at seperate times
+# run loci 1-900
+
+# Load RAxML
+module load RAxML/8.2.12-gompi-2021b-hybrid-avx2
+
+# Define the directory containing gene alignments
+alignment=$(head -n "$SLURM_ARRAY_TASK_ID" alignments.txt | tail -1)
+echo "Reading algignment"
+echo $alignment
+
+# Extract the base name of the file (remove the path and extension)
+base_name=$(basename "$alignment" _aligned_rm.fasta)
+
+# Run RAxML for the current gene alignment
+raxmlHPC-HYBRID-AVX2 -f a -s "$alignment" -m GTRGAMMA -n "${base_name}_hybpiper" -N 100 -k -x 123 -p 456 -T $SLURM_CPUS_PER_TASK
+
+# Notes on the parameters
+# -s [sequence file]
+# -n [output file name]
+# -m [substitutionModel][GTRGAMMA or GTRGAMMAI or GTRCAT]
+# -f a [bootstrap search and ML search in one analysis]
+# -N or-# [Specify the number of alternative runs on distinct starting trees][can specify auto with autoMRE]
+# -x [randonm seed for bootstrap]
+# -p [random seed for parsimony inferences]
+# -T [number of threads]
+# -k [specifiies that the bootstrap]
+# -q [file with the partitions]
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Next, run array batch 2
+
+Second batch are loci 901-1038.
+
+form /scratch/$USER/Gnaphalieae/data/5_Phylogeny_coalescent/Hybpiper/Gene_trees run:
+sbatch /scratch/$USER/Gnaphalieae/scripts/phylogeny_genetrees_hybpiper_array2.sh
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#!/bin/bash
+
+#SBATCH --time=03:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=8
+#SBATCH --mem=8GB
+#SBATCH --cpus-per-task=1
+#SBATCH --job-name=gene_trees_paralogs_array2
+#SBATCH --array=1-138
+
+# Run this from directory: 5_Phylogeny_coalescent/Paralogs/Gene_trees
+# Be sure to set the array number to match number of loci alignments
+# Note: Habrok limit of 1000 jobs at one time, so need to split array into 2 and run at seperate times
+# check the number of alignments to get exact array range (here 1038)
+# run loci 901-1038: set array to 1-138 (1038-900=138) and below adjust counter to 1+900
+
+# Load RAxML
+module load RAxML/8.2.12-gompi-2021b-hybrid-avx2
+
+# Read the gene alignment file corresponding to the current task in the array.
+alignment=$(head -n $(($SLURM_ARRAY_TASK_ID + 900)) alignments.txt | tail -1)
+echo "Reading alignment:"
+echo $alignment
+
+# Extract the base name of the file (remove the path and extension)
+base_name=$(basename "$alignment" _aligned_rm.fasta)
+
+# Run RAxML for the current gene alignment
+raxmlHPC-HYBRID-AVX2 -f a -s "$alignment" -m GTRGAMMA -n "${base_name}_hybpiper" -N 100 -k -x 123 -p 456 -T $SLURM_CPUS_PER_TASK
+
+# Notes on the parameters
+# -s [sequence file]
+# -n [output file name]
+# -m [substitutionModel][GTRGAMMA or GTRGAMMAI or GTRCAT]
+# -f a [bootstrap search and ML search in one analysis]
+# -N or-# [Specify the number of alternative runs on distinct starting trees][can specify auto with autoMRE]
+# -x [randonm seed for bootstrap]
+# -p [random seed for parsimony inferences]
+# -T [number of threads]
+# -k [specifiies that the bootstrap]
+# -q [file with the partitions]
+
+--------------------------------------------------------------------------------
+Lastly, check how the individual jobs in the array ran
+
+Get an overview of the jobs:
+sacct -n -X -u $USER -o state%20 | sort | uniq -c
+
+13647234
+13650497
+
+See the jobs that failed or timed out:
+sacct -u $USER --jobs=13647234 --state=TIMEOUT
+sacct -u $USER --jobs=13647234 --state=FAILED
+sacct -u $USER --jobs=13650497 --state=TIMEOUT
+sacct -u $USER --jobs=13650497 --state=FAILED
+
+Count the number of gene trees to check it matches number of alignments: 
+ls -1 | grep 'bestTree' | wc -l
+1033
+
+Several loci (5) failed to produce gene trees.
+
+================================================================================
+Step 5b. Build coalesent species tree with ASTRAL (Hybpiper)
+
+The main steps:
+1. Concatenate the gene tree files 
+2. Run ASTRAL 
+
+Build species tree with Weighted ASTRAL (wASTRAL) - Hybrid (default) 
+* Threshold-free weighting schemes for the quartet-based species tree inference, the metric used in the popular method ASTRAL. 
+*  By reducing the impact of quartets with low support or long terminal branches (or both), weighting provides stronger theoretical guarantees and better empirical performance than the unweighted ASTRAL
+* https://github.com/chaoszhang/ASTER/blob/master/tutorial/wastral.md
+
+wASTRAL outputs:
+* the species tree topology
+* branch lengths in coalescent units for astral-weighted and in combined (coalensecent + 2 * substitution) units (only for internal branches)
+* branch supports measured as local posterior probabilities
+
+form /scratch/$USER/Gnaphalieae/data/5_Phylogeny_coalescent/Hybpiper/Species_tree run:
+sbatch /scratch/$USER/Gnaphalieae/scripts/phylogeny_speciestree_hybpiper_astral.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=06:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=5GB
+#SBATCH --job-name=phylogeny_speciestree_astral
+
+# Run from /5_Phylogeny_coalescent/Hybpiper/Species_tree
+
+# Concatenate all the gene trees into one file
+cat ../Gene_trees/RAxML_bipartitions.* > all_genetrees_hybiper.tre
+
+# Build species tree with w-ASTRAL (hybrid)
+# Weighted ASTRAL (wASTRAL) - Hybrid (default) 
+# Threshold-free weighting schemes for the quartet-based species tree inference, the metric used in the popular method ASTRAL. 
+# https://github.com/chaoszhang/ASTER/blob/master/tutorial/wastral.md
+
+module load ASTER
+
+astral-hybrid -x 100 -n 33 -i all_genetrees_hybiper.tre -o Species_tree_hybpiper_wastral.tre 2> Species_tree_hybpiper_wastral.log
+
+================================================================================
+Step 5a. Build gene trees for each loci alignment (Paralogs)
+
+Build gene trees for each loci alignment with paralogs included
+
+The more loci and more samples included in the project greatly increase run time, making a simple loop not the most efficient or cost effective way to build the individual gene trees. 
+
+So we set the job up as an array. 
+There are a couple small but important considerations:
+* RAxML will often add a .fasta.reduced file back to the alignment directory, so the safest strategy is to define the alignment paths and files for a given dataset to a txt file right from the start and use this in the array
+* Habrok has a limit of 1000 active jobs per user, so we will run the loci in two seperate batches 
+
+The work flow: 
+1. Create text that lists the path and file of all the alignments in a given dataset 
+2. Run array batch 1
+3. Run array batch 2
+4. Check how all the jobs in the array performed 
+
+--------------------------------------------------------------------------------
+# Generate lists 
+
+First, Generate an alignments text file that 
+
+On the terminal, form /scratch/$USER/Gnaphalieae/data/5_Phylogeny_coalescent/Paralogs/Gene_trees
+Run: ls /scratch/$USER/Gnaphalieae/data/4_Alignments/Paralogs/*.fasta > alignments.txt
+
+This creates a text files with the file path and alignment file.
+
+The alignments file looks like:
+head -n 2 alignments.txt
+/scratch/$USER/Gnaphalieae/data/4_Alignments/Paralogs/At1g01050_paralogs_all_aligned_rm.fasta
+/scratch/$USER/Gnaphalieae/data/4_Alignments/Paralogs/At1g01470_paralogs_all_aligned_rm.fasta
+
+Count how many alignments in the dataset, this will be the array length:
+wc -l alignments.txt
+1038
+
+--------------------------------------------------------------------------------
+# 2-3 Build gene trees 
+
+Run array batch 1
+
+First batch are loci 1-900.
+
+form /scratch/$USER/Gnaphalieae/data/5_Phylogeny_coalescent/Paralogs/Gene_trees run:
+sbatch /scratch/$USER/Gnaphalieae/scripts/phylogeny_genetrees_paralogs_array1.sh
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#!/bin/bash
+
+#SBATCH --time=03:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=8
+#SBATCH --mem=8GB
+#SBATCH --cpus-per-task=1
+#SBATCH --job-name=gene_trees_paralogs_array1
+#SBATCH --array=1-900
+
+# Run this from directory: 5_Phylogeny_coalescent/Paralogs/Gene_trees
+# Be sure to set the array number to match number of loci alignments
+# Note: Habrok limit of 1000 jobs at one time, so need to split array into 2 and run at seperate times
+# run loci 1-900
+
+# Load RAxML
+module load RAxML/8.2.12-gompi-2021b-hybrid-avx2
+
+# Define the directory containing gene alignments
+alignment=$(head -n "$SLURM_ARRAY_TASK_ID" alignments.txt | tail -1)
+echo "Reading algignment"
+echo $alignment
+
+# Extract the base name of the file (remove the path and extension)
+base_name=$(basename "$alignment" _all_aligned_rm.fasta)
+
+# Run RAxML for the current gene alignment
+raxmlHPC-HYBRID-AVX2 -f a -s "$alignment" -m GTRGAMMA -n "${base_name}" -N 100 -k -x 123 -p 456 -T $SLURM_CPUS_PER_TASK
+
+# Notes on the parameters
+# -s [sequence file]
+# -n [output file name]
+# -m [substitutionModel][GTRGAMMA or GTRGAMMAI or GTRCAT]
+# -f a [bootstrap search and ML search in one analysis]
+# -N or-# [Specify the number of alternative runs on distinct starting trees][can specify auto with autoMRE]
+# -x [randonm seed for bootstrap]
+# -p [random seed for parsimony inferences]
+# -T [number of threads]
+# -k [specifiies that the bootstrap]
+# -q [file with the partitions]
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Next, run array batch 2
+
+Second batch are loci 901-1038.
+
+form /scratch/$USER/Gnaphalieae/data/5_Phylogeny_coalescent/Paralogs/Gene_trees run:
+sbatch /scratch/$USER/Gnaphalieae/scripts/phylogeny_genetrees_paralogs_array2.sh
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#!/bin/bash
+
+#SBATCH --time=03:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=8
+#SBATCH --mem=8GB
+#SBATCH --cpus-per-task=1
+#SBATCH --job-name=gene_trees_paralogs_array2
+#SBATCH --array=1-138
+
+# Run this from directory: 5_Phylogeny_coalescent/Paralogs/Gene_trees
+# Be sure to set the array number to match number of loci alignments
+# Note: Habrok limit of 1000 jobs at one time, so need to split array into 2 and run at seperate times
+# check the number of alignments to get exact array range (here 1038)
+# run loci 901-1038: set array to 1-138 (1038-900=138) and below adjust counter to 1+900
+
+# Load RAxML
+module load RAxML/8.2.12-gompi-2021b-hybrid-avx2
+
+# Read the gene alignment file corresponding to the current task in the array.
+alignment=$(head -n $(($SLURM_ARRAY_TASK_ID + 900)) alignments.txt | tail -1)
+echo "Reading alignment:"
+echo $alignment
+
+# Extract the base name of the file (remove the path and extension)
+base_name=$(basename "$alignment" _all_aligned_rm.fasta)
+
+# Run RAxML for the current gene alignment
+raxmlHPC-HYBRID-AVX2 -f a -s "$alignment" -m GTRGAMMA -n "${base_name}" -N 100 -k -x 123 -p 456 -T $SLURM_CPUS_PER_TASK
+
+# Notes on the parameters
+# -s [sequence file]
+# -n [output file name]
+# -m [substitutionModel][GTRGAMMA or GTRGAMMAI or GTRCAT]
+# -f a [bootstrap search and ML search in one analysis]
+# -N or-# [Specify the number of alternative runs on distinct starting trees][can specify auto with autoMRE]
+# -x [randonm seed for bootstrap]
+# -p [random seed for parsimony inferences]
+# -T [number of threads]
+# -k [specifiies that the bootstrap]
+# -q [file with the partitions]
+
+--------------------------------------------------------------------------------
+Lastly, check how the individual jobs in the array ran
+
+Get an overview of the jobs:
+sacct -n -X -u $USER -o state%20 | sort | uniq -c
+
+13664883
+13668657
+
+See the jobs that failed or timed out:
+sacct -u $USER --jobs=13664883 --state=TIMEOUT
+sacct -u $USER --jobs=13664883 --state=FAILED
+sacct -u $USER --jobs=13668657 --state=TIMEOUT
+sacct -u $USER --jobs=13668657 --state=FAILED
+
+Count the number of gene trees to check it matches number of alignments: 
+ls -1 | grep 'bestTree' | wc -l
+
+Several loci (20) failed to produce gene trees:
+
+================================================================================
+Step 5b. Build coalesent species tree with ASTRAL (Paralogs)
+
+The main steps:
+1. Concatenate the gene tree files 
+2. Filter out the paralog ids so that the paralogs of the same sample are forced monophyletic
+3. Run ASTRAL 
+
+Build species tree with ASTRALpro
+   * Can handle multiple copy genes
+   * https://github.com/chaoszhang/ASTER/blob/master/tutorial/astral-pro3.md
+   * https://doi.org/10.1093/bioinformatics/btac620
+   * https://doi.org/10.1093/molbev/msaa139
+
+ASTRALpro input:
+ * The input gene trees are in the Newick format
+ * The input trees can have missing taxa, polytomies (unresolved branches), and multi-copy genes
+ * When multiple genes from the same species are available, you ask ASTRAL to force them to be together in the species tree via a mapping file or identical species names (strip paralogs ids - .main, .0, .1)
+
+ASTRALpro outputs:
+ * the species tree topology
+ * branch lengths in substitution-per-site units (IQ-TREE like) for all branches
+ * branch supports measured as local posterior probabilities
+
+form /scratch/$USER/Gnaphalieae/data/5_Phylogeny_coalescent/Paralogs/Species_tree run:
+sbatch /scratch/$USER/Gnaphalieae/scripts/phylogeny_speciestree_paralogs_astralpro.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=06:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=5GB
+#SBATCH --job-name=phylogeny_speciestree_paralogs_astralpro
+
+# Run from /5_Phylogeny_coalescent/Hybpiper/Species_tree
+
+# Concatenate all the gene trees into one file
+cat ../Gene_trees/RAxML_bipartitions.* > all_genetrees_paralogs.tre
+
+# Filter the gene trees to remove paralog IDs (.main, .0, .1, ...)
+sed -E 's/(\.[0-9]+|\.main):/:/g' all_genetrees_paralogs.tre > all_genetrees_paralogs_filtered.tre
+
+# Build species tree with ASTRAL-pro
+# https://github.com/chaoszhang/ASTER/blob/master/tutorial/astral-pro3.md
+
+module load ASTER
+
+astral-pro -i all_genetrees_paralogs_filtered.tre -o Species_tree_paralogs_astralpro.tre 2> Species_tree_paralogs_astralpro.log
+
+================================================================================
+Step 5a. Build gene trees for each loci alignment (Paragone)
+
+Build gene trees for each loci alignment generated through Paragone 
+
+The more loci and more samples included in the project greatly increase run time, making a simple loop not the most efficient or cost effective way to build the individual gene trees. 
+
+So we set the job up as an array. 
+There are a couple small but important considerations:
+* RAxML will often add a .fasta.reduced file back to the alignment directory, so the safest strategy is to define the alignment paths and files for a given dataset to a txt file right from the start and use this in the array
+* Habrok has a limit of 1000 active jobs per user, so we will run the loci in two seperate batches 
+
+The work flow: 
+1. Create text that lists the path and file of all the alignments in a given dataset 
+2. Run array batch 1
+3. Run array batch 2
+4. Check how all the jobs in the array performed 
+
+--------------------------------------------------------------------------------
+# Generate lists 
+
+First, Generate an alignments text file that 
+
+# PF
+On the terminal, form /scratch/$USER/Gnaphalieae/data/5_Phylogeny_coalescent/Paragone/Gene_trees/PF
+Run: ls /scratch/$USER/Gnaphalieae/data/4_Alignments/Paragone/PF/*.fasta > alignments.txt
+# MO
+On the terminal, form /scratch/$USER/Gnaphalieae/data/5_Phylogeny_coalescent/Paragone/Gene_trees/MO
+Run: ls /scratch/$USER/Gnaphalieae/data/4_Alignments/Paragone/MO/*.fasta > alignments.txt
+
+This creates a text files with the file path and alignment file.
+
+The alignments file looks like:
+head -n 2 alignments.txt
+/scratch/$USER/Gnaphalieae/data/4_Alignments/Paragone/PF/At1g01050_1.1to1ortho.selected_stripped.aln.trimmed.fasta
+/scratch/$USER/Gnaphalieae/data/4_Alignments/Paragone/PF/At1g01470_1.1to1ortho.selected_stripped.aln.trimmed.fasta
+
+Count how many alignments in the dataset, this will be the array length:
+# PF
+wc -l alignments.txt
+278
+
+# MO
+wc -l alignments.txt
+791
+
+--------------------------------------------------------------------------------
+# 2-3 Build gene trees 
+
+# Paragone-PF 
+
+278 loci
+
+Run single array 1/1
+
+form /scratch/$USER/Gnaphalieae/data/5_Phylogeny_coalescent/Paragone/Gene_trees/PF run:
+sbatch /scratch/$USER/Gnaphalieae/scripts/phylogeny_genetrees_paragone-PF.sh
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#!/bin/bash
+
+#SBATCH --time=03:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=8
+#SBATCH --mem=8GB
+#SBATCH --cpus-per-task=1
+#SBATCH --job-name=gene_trees_paragone-PF
+#SBATCH --array=1-278
+
+# Be sure to set the array number to match number of loci alignments!
+
+# Run this from directory: 5_Phylogeny_coalescent/Paragone/Gene_trees/PF
+
+# Load RAxML
+module load RAxML/8.2.12-gompi-2021b-hybrid-avx2
+
+# Define the directory containing gene alignments
+alignment=$(head -n "$SLURM_ARRAY_TASK_ID" alignments.txt | tail -1)
+echo "Reading algignment"
+echo $alignment
+
+# Extract the base name of the file (remove the path and extension)
+# .selected_stripped.aln.trimmed.fasta
+base_name=$(basename "$alignment" .selected_stripped.aln.trimmed.fasta)
+
+# Run RAxML for the current gene alignment
+raxmlHPC-HYBRID-AVX2 -f a -s "$alignment" -m GTRGAMMA -n "${base_name}_paragonePF" -N 100 -k -x 123 -p 456 -T $SLURM_CPUS_PER_TASK
+
+
+# Notes on the parameters
+# -s [sequence file]
+# -n [output file name]
+# -m [substitutionModel][GTRGAMMA or GTRGAMMAI or GTRCAT]
+# -f a [bootstrap search and ML search in one analysis]
+# -N or-# [Specify the number of alternative runs on distinct starting trees][can specify auto with autoMRE]
+# -x [randonm seed for bootstrap]
+# -p [random seed for parsimony inferences]
+# -T [number of threads]
+# -k [specifiies that the bootstrap]
+# -q [file with the partitions]
+
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+# Paragone-MO
+
+791 loci
+
+Run single array 1/1
+
+form /scratch/$USER/Gnaphalieae/data/5_Phylogeny_coalescent/Paragone/Gene_trees/MO run:
+sbatch /scratch/$USER/Gnaphalieae/scripts/phylogeny_genetrees_paragone-MO.sh
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#!/bin/bash
+
+#SBATCH --time=03:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=8
+#SBATCH --mem=8GB
+#SBATCH --cpus-per-task=1
+#SBATCH --job-name=gene_trees_array_paragone-MO
+#SBATCH --array=1-791
+
+# Be sure to set the array number to match number of loci alignments!
+
+# Run this from directory: 5_Phylogeny_coalescent/Paragone/Gene_trees/MO
+
+# Load RAxML
+module load RAxML/8.2.12-gompi-2021b-hybrid-avx2
+
+# Define the directory containing gene alignments
+alignment=$(head -n "$SLURM_ARRAY_TASK_ID" alignments.txt | tail -1)
+echo "Reading algignment"
+echo $alignment
+
+# Extract the base name of the file (remove the path and extension)
+# .selected_stripped.aln.trimmed.fasta
+base_name=$(basename "$alignment" .selected_stripped.aln.trimmed.fasta)
+
+# Run RAxML for the current gene alignment
+raxmlHPC-HYBRID-AVX2 -f a -s "$alignment" -m GTRGAMMA -n "${base_name}_paragoneMO" -N 100 -k -x 123 -p 456 -T $SLURM_CPUS_PER_TASK
+
+# Notes on the parameters
+# -s [sequence file]
+# -n [output file name]
+# -m [substitutionModel][GTRGAMMA or GTRGAMMAI or GTRCAT]
+# -f a [bootstrap search and ML search in one analysis]
+# -N or-# [Specify the number of alternative runs on distinct starting trees][can specify auto with autoMRE]
+# -x [randonm seed for bootstrap]
+# -p [random seed for parsimony inferences]
+# -T [number of threads]
+# -k [specifiies that the bootstrap]
+# -q [file with the partitions]
+
+--------------------------------------------------------------------------------
+# Lastly, check how the individual jobs in the array ran
+
+Get an overview of the jobs:
+sacct -n -X -u $USER -o state%20 | sort | uniq -c
+
+# PF
+# See the jobs that failed or timed out:
+sacct -u $USER --jobs=13698428 --state=TIMEOUT
+sacct -u $USER --jobs=13698428 --state=FAILED
+# Count the number of gene trees to check it matches number of alignments: 
+ls -1 | grep 'bestTree' | wc -l
+0 failed to produce gene trees
+
+
+# MO
+# See the jobs that failed or timed out:
+sacct -u $USER --jobs=13698853 --state=TIMEOUT
+sacct -u $USER --jobs=13698853 --state=FAILED
+# Count the number of gene trees to check it matches number of alignments: 
+ls -1 | grep 'bestTree' | wc -l
+0 failed to produce gene trees
+
+================================================================================
+Step 5b. Build coalesent species tree with ASTRAL (Paragone)
+
+The main steps for each algorithm (PF, MO)
+1. Concatenate the gene tree files 
+2. Run ASTRAL 
+
+Build species tree with Weighted ASTRAL (wASTRAL) - Hybrid (default) 
+* Threshold-free weighting schemes for the quartet-based species tree inference, the metric used in the popular method ASTRAL. 
+*  By reducing the impact of quartets with low support or long terminal branches (or both), weighting provides stronger theoretical guarantees and better empirical performance than the unweighted ASTRAL
+* https://github.com/chaoszhang/ASTER/blob/master/tutorial/wastral.md
+
+wASTRAL outputs:
+* the species tree topology
+* branch lengths in coalescent units for astral-weighted and in combined (coalensecent + 2 * substitution) units (only for internal branches)
+* branch supports measured as local posterior probabilities
+
+form /scratch/$USER/Gnaphalieae/data/5_Phylogeny_coalescent/Paragone/Species_tree run:
+sbatch /scratch/$USER/Gnaphalieae/scripts/phylogeny_speciestree_paragone_astral.sh
+--------------------------------------------------------------------------------
+#!/bin/bash
+
+#SBATCH --time=06:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --mem=5GB
+#SBATCH --job-name=phylogeny_speciestree_paragone_astral
+
+# Run from /5_Phylogeny_coalescent/Paragone/Species_tree
+
+# Concatenate all the gene trees into one file
+cat ../Gene_trees/PF/RAxML_bipartitions.* > PF/all_genetrees_paragonePF.tre
+cat ../Gene_trees/MO/RAxML_bipartitions.* > MO/all_genetrees_paragoneMO.tre
+
+
+# Build species tree with w-ASTRAL (hybrid)
+# Weighted ASTRAL (wASTRAL) - Hybrid (default) 
+# Threshold-free weighting schemes for the quartet-based species tree inference, the metric used in the popular method ASTRAL. 
+# https://github.com/chaoszhang/ASTER/blob/master/tutorial/wastral.md
+
+module load ASTER
+
+astral-hybrid -x 100 -n 33 -i PF/all_genetrees_paragonePF.tre -o PF/Species_tree_paragonePF_wastral.tre 2> PF/Species_tree_paragonePF_wastral.log
+astral-hybrid -x 100 -n 33 -i MO/all_genetrees_paragoneMO.tre -o MO/Species_tree_paragoneMO_wastral.tre 2> MO/Species_tree_paragoneMO_wastral.log
+
+================================================================================
+Step 5. Phylogeny - Coalescent: Tree comparison
+
+At this stage we want to compare different tree build strategies: 
+1. Hybpiper - taking forward hybpipers native selection of the best contigs (hybpiper default)
+2. Paragone-PF - paralogy free loci
+3. Paragone-MO - paralogy resolution with "Monophyletic Outgroup" algorithm
+5. Paralogs - utilizing paralogs in tree building 
+
+--------------------------------------------------------------------------------
+Tree Comparison: Robinson Foulds Distances
+
+Robinson-Foulds (RF) distance is a metric used to compare the differences between two phylogenetic trees. It's a commonly used measure in computational biology and bioinformatics to assess the similarity or dissimilarity between trees. 
+
+The RF distance measures the dissimilarity between two phylogenetic trees by counting the number of different splits (bipartitions) between the trees. A split in a tree divides the set of taxa (species or genes) into two non-overlapping groups. The RF distance essentially counts the number of splits that are present in one tree but not in the other.
+
+The R script below computed the RF distances between the trees and outputs a heatmap plot to compare the trees, and we also perfomr PCA on the distance matrix to provide a visual representation of the overall similarity among the trees. 
+
+Observations from the heatmap and PCA: 
+   * 
+
+Run the Rscript below directly on the command line 
+from /scratch/$USER/Gnaphalieae/data/5_Phylogeny_coalescent/Tree_comparison
+module load R/4.2.1-foss-2022a
+Rscript /scratch/$USER/Gnaphalieae/scripts/Tree_comparison.R
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+#!/usr/bin/env Rscript
+
+# Adjusted Robinson Foulds Distance
+
+# Load necessary libraries
+library(phangorn)
+library(ape)
+library(phytools)
+library(ggplot2)
+library(vegan)
+library(reshape2)
+library(viridis)
+library(ggrepel)
+
+# Read the trees
+# Be sure path is correct
+tr1 <- read.tree("../Hybpiper/Species_tree/Species_tree_hybpiper_wastral.tre")
+tr2 <- read.tree("../Paragone/Species_tree/PF/Species_tree_paragonePF_wastral.tre")
+tr3 <- read.tree("../Paragone/Species_tree/MO/Species_tree_paragoneMO_wastral.tre")
+tr4 <- read.tree("../Paralogs/Species_tree/Species_tree_paralogs_astralpro.tre")
+
+# 1. Preparation 
+
+## Root the trees
+outgroup <- c("Athrixia_phylicoides_R14373", "Phagnalon_sordidum_GC2743", "Leysera_gnaphalodes_R14525", "Oedera_pungens_R14489")
+
+tr1 <- root(tr1, outgroup = outgroup, resolve.root = TRUE)
+tr2 <- root(tr2, outgroup = outgroup, resolve.root = TRUE)
+tr3 <- root(tr3, outgroup = outgroup, resolve.root = TRUE)
+tr4 <- root(tr4, outgroup = outgroup, resolve.root = TRUE)
+
+# Check if the trees are rooted
+cat("Is tr1 rooted?", is.rooted(tr1), "\n")
+cat("Is tr2 rooted?", is.rooted(tr2), "\n")
+cat("Is tr3 rooted?", is.rooted(tr3), "\n")
+cat("Is tr4 rooted?", is.rooted(tr4), "\n")
+
+# 2. Make a table of RFadj values
+
+# Create an empty matrix with 4 rows and 4 columns
+matrixinp = matrix(data=NA, nrow=4, ncol=4) 
+
+# Display the empty matrix 
+print(matrixinp)
+
+# Make list of trees
+tree_list <- list(tr1, tr2, tr3, tr4)
+
+for(j in 1:length(tree_list)){ 
+  for (i in 1:length(tree_list)) {
+    tree1 <- tree_list[[i]]  
+    tree2 <- tree_list[[j]]
+    matrixinp[i,j] = RF.dist(tree1, tree2, check.labels = TRUE, normalize = TRUE, rooted = TRUE)
+  }
+} 
+
+# Give the matrix column and row names
+colnames(matrixinp) <- c("HybPiper", "ParaGone-PF", "ParaGone-MO", "Paralogs")
+rownames(matrixinp) <- c("HybPiper", "ParaGone-PF", "ParaGone-MO", "Paralogs")
+
+# View the matrix
+matrixinp
+
+# export the matrix as a csv
+write.csv(matrixinp, "RFDistance_Gnaphalieae_coalescent.csv")
+
+# Plot the heatmap
+
+# Melt the matrix to long format
+matrix_long <- melt(matrixinp)
+
+# Filter out the lower triangle and the diagonal by setting lower triangle values to NA
+matrix_long <- matrix_long[as.numeric(matrix_long$Var1) <= as.numeric(matrix_long$Var2), ]
+
+# Plot the heatmap with viridis color scale
+heatmap_plot <- ggplot(data = matrix_long, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_viridis(name = "RF Distance", option = "D", direction = 1) +
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1, 
+                                   size = 10, hjust = 1),
+        axis.text.y = element_text(size = 10),
+        title = element_text(size = 10)) +
+  labs(x = 'Tree Comparison', y = 'Tree Comparison', title = 'Heatmap of Adjusted Robinson-Foulds Distances')
+
+# Print the heatmap
+print(heatmap_plot)
+
+ggsave(heatmap_plot,
+       filename = "heatmap_RFDistance_Gnaphalieae_coalescent.pdf", 
+       device = "pdf", width = 5, height = 4, units = "in")
+
+
+# 3. Visualize Robinson-Foulds values as a PCA
+# Classical multidimensional scaling (MDS) of a data matrix. Also known as principal coordinates analysis:
+
+pca <- pcoa(matrixinp, correction = "none", rn = NULL)
+
+# Convert PCoA results to a data frame for plotting
+pca_df <- as.data.frame(pca$vectors)
+pca_df$Sample <- rownames(pca_df)  # Add sample names for labeling
+
+# Plot PCA
+pca_plot <- ggplot(pca_df, aes(x = Axis.1, y = Axis.2)) +
+  geom_point(size = 3, aes(color = Sample)) +
+  geom_text_repel(aes(label = Sample), size = 4, box.padding = 0.5, point.padding = 0.5, max.overlaps = Inf) +
+  scale_color_manual(values = RColorBrewer::brewer.pal(n = length(unique(pca_df$Sample)), name = "Set1")) +  # Use a default ggplot2 color palette
+  theme_bw() +  # Use theme_bw for a clean background
+  theme(plot.margin = margin(10, 10, 10, 10),  # Ensure there's space around the plot
+        axis.title = element_text(size = 14),
+        axis.text = element_text(size = 12),
+        legend.position = "none") +  # Remove legend
+  labs(x = paste("PCoA Axis 1 (", round(pca$values$Relative_eigenvalues[1] * 100, 1), "%)", sep = ""),
+       y = paste("PCoA Axis 2 (", round(pca$values$Relative_eigenvalues[2] * 100, 1), "%)", sep = ""),
+       title = "PCA of Robinson-Foulds Distances")
+pca_plot
+
+# Save the PCA plot
+ggsave(pca_plot, filename = "pca_RFDistance_Gnaphalieae_coalescent.pdf", device = "pdf", width = 6, height = 5, units = "in")
+
+
+
