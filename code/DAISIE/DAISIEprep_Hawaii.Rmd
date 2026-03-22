@@ -1,0 +1,1243 @@
+---
+title: 'DAISIEprep: Hawaiian Asteraceae'
+output: html_document
+date: "2025-01-24"
+---
+
+# Overview
+
+## DAISIEprep workflow
+
+Preparing community island data for DAISIE using DAISIEprep (<https://joshwlambert.github.io/DAISIEprep/index.html>) can be broken into 3 major steps:
+
+### 1. Read in data (island checklists and phylogenies) and resolve issues
+
+Starting data needed:
+
+-   Checklist of island community (minimum needed = Species name and endemicity status)
+
+-   Overview of island lineages (optional)
+
+-   Dated phylogenies (if available)
+
+Three sub-steps:
+
+A. Load data
+
+B. Resolve any issues with the dated phylogenies (standardize names, resolve non-monophyly)
+
+C. Combine phylogeny and endemicity status `create_endemicity_status()`
+
+### 2. Build island_tbl for all lineages
+
+Protocol based on data availability.
+
+**Dated phylogeny available:**
+
+-   Reconstruct ASR with `add_asr_node_states()`
+
+-   Extract island species with `extract_island_species()`
+
+-   Add missing species for each lineage with `add_missing_species()`
+
+**Diversity data only or In-text age estimates:**
+
+-   Add all lineage information with `add_island_colonist()`
+
+`add_island_colonist()`
+
+Very important function and full details found here: <https://joshwlambert.github.io/DAISIEprep/reference/add_island_colonist.html?q=add_island_colonist#ref-usage>. This function adds an island colonists (can be either a singleton lineage or an island clade) to the island community (island_tbl).
+
+Missing species is difficult to calculate. General protocol: Number of missing species = Number of species in lineage - Number of colonization and branching times available. Read tutorial carefully for different scenarios: <https://joshwlambert.github.io/DAISIEprep/articles/Tutorial.html#adding-missing-species>
+
+### 3. Create DAISIE data table
+
+Convert `island_tbl` to a DAISIE data list with `create_daisie_data()`
+
+Need to provide and specify the following:
+
+-   `island_tbl` with all the lineages
+
+-   island age
+
+-   number of mainland species
+
+-   precise colonization times
+
+## Hawaiian Asteraceae overview
+
+The Hawaiian Asteraceae are represented by 101 native species, 100 of which are endemic to the archipelago. The Asteraceae community comprises at least 12 independent colonization events, and 8 radiations for 3 or more species.
+
+Here is an overview of the Hawaiian Asteraceae lineages with notes on diversity and data available per lineages.
+
+```{r}
+Hawaiian_clades <- readxl::read_xlsx("../data/Hawaii_clades.xlsx")
+head(Hawaiian_clades)
+```
+
+We have the full spectrum of data availabilty across the lineages. There has been previous phylogeny work on several of the lineages and we have dated phylogenetic trees for three lineages: the Silversword alliance (Landis 2018, <https://doi.org/10.1111/evo.13594>); Bidens (Knope 2020, <https://doi.org/10.1111/jse.12704>), and Hesperomannia. One lineage doe not have their dated trees publicly available but we can use the in-text age estimates: Lipochaeta (Edwards 2018, <https://doi.org/10.12705/673.6>). And eight lineages were not previously represented in a dated tree, so we sequenced with target capture / HybSeq and built new dated trees for these lineages: Tetramolopium, Keysseria, Remya, Pseudognaphalium (at least 3 independent colonizations), Adenostemma, and Artemesia.
+
+## Libraries
+
+Install DAISIEprep
+
+```{r, eval=F}
+remotes::install.packages("remotes")
+remotes::install_github("joshwlambert/DAISIEprep")
+```
+
+Load libraries
+
+```{r, message=F}
+library(readxl)
+library(writexl)
+library(DAISIEprep)
+library(DAISIE)
+library(ape)
+library(phylobase)
+library(ggtree)
+library(ggimage)
+library(castor)
+library(tidyverse)
+library(phytools)
+library(treeio)
+```
+
+# 1. Read in data (island checklists and phylogenies) and resolve issues
+
+## 1a: Load the data
+
+The island community checklist is a list of all the species native in an island/archipelego. The minimum required elements are the species name and island endemicity status.
+
+```{r}
+checklist <- read_xlsx("../data/Asteraceae_species_checklist_Hawaii.xlsx", sheet = "Checklist")
+
+checklist <- checklist %>%
+  filter(is.na(Subspecies) | Subspecies == "")
+```
+
+Note this checklist includes subspecies, but for DAISIE we want to model everything at the species level as to not over-inflate rates. So we will be working at the species level.
+
+For connecting the checklists to the phylogeny later, we will need two column data frame with the species names (`tip_labels`) and formatted at Genus_species in the first column, and a second column with endemicity status (`tip_endemicity_status`) with the status being either "endemic" or "nonendemic"
+
+```{r}
+Hawaiian_endemicity <- checklist %>%
+select(c(Standardized_name, DAISIE_endemicity_status)) %>%
+  rename(tip_labels = Standardized_name, tip_endemicity_status = DAISIE_endemicity_status)
+```
+
+Load the phylogenetic trees
+
+```{r}
+hesperomannia <- ape::read.nexus("../data/phylogenies/Hesperomannia_Keeley_2021.tre")
+silversword <- ape::read.nexus("../data/phylogenies/Silverswords_Hawaii_Landis_2018.tre")
+bidens <- ape::read.nexus("../data/phylogenies/Bidens_Pacific_Knope_2020.tre")
+islandAsteraceae <- ape::read.nexus("../data/phylogenies/Asteraceae-wide_Paragone-MO_ML-dated.tre")
+
+is.rooted(islandAsteraceae) 
+is.binary(islandAsteraceae)  
+```
+
+## 1b: Resolve any issues with the dated phylogenies (standardize names, resolve non-monophyly)
+
+Each phylogeny has its own tip label naming convention that we need to standardize in order to match our island checklist data and be compatible with DAISIEprep. Additionally, other issues may arise around duplicate samples and non-monophyly. The *Silversword* and *Bidens* phylogeny have sampled multiple individuals of the same species, so need to remove the species duplicates. This is also complicated by the fact that in numerous cases the subspecies or multi-sample species are not monophyletic. There are several strategies to deal with this. One, remove duplicates of monophyletic subspecies/multi-sampled species. For the non-monophyletic subspecies either (a) take the oldest branching time (more congruent with incomplete lineage sorting) (b) select the the autonym subspecies (c) remove subspecies randomly.
+
+Here we will standardize the names and take the oldest branching times for the non-monophyletic species.
+
+### **Silverswords**
+
+Remove subspecies from the silverswords to not inflate species richness on the archipelago, subspecies can later be optionally kept if deemed important for the analysis of the diversification rate.
+
+```{r}
+# 1. Split the tip label based on "_"
+split_names_silverswords <- strsplit(x = silversword$tip.label, split = "_")
+# capture genus names 
+genus_names_silverswords <- sapply(split_names_silverswords, "[[", 1)
+# capture species names 
+species_names_silverswords <- sapply(split_names_silverswords, "[[", 2)
+# combine genus and species names
+genus_species_names_silverswords <- paste(genus_names_silverswords, species_names_silverswords, sep = "_")
+
+# 2. Deal with the duplicate and non-monophyletic species
+# 2a. Det a list of species with duplicates in the phylogeny 
+island_multi_tip_silverswords <- genus_species_names_silverswords[which(duplicated(genus_species_names_silverswords))]
+island_multi_tip_silverswords <- unique(island_multi_tip_silverswords)
+
+# 2b. Get the tip position of all the duplicates
+tip_position <- list()
+for (i in seq_along(island_multi_tip_silverswords)) {
+  tip_position[[i]] <- grep(
+    pattern = island_multi_tip_silverswords[i],
+    x = silversword$tip.label
+  )
+}
+
+# 2c. Select the tip with the oldest branch time for each species
+# Function to get the node age for a given tip position
+get_node_age_at_position <- function(tree, position) {
+  tip_label <- tree$tip.label[position]  # Get the tip label at the position
+  node_number <- match(tip_label, tree$tip.label)  # Find the node number
+  edge_length <- tree$edge.length[which(tree$edge[, 2] == node_number)]  # Extract the edge length
+  return(edge_length)
+}
+# Initialize a summary table
+summary_table_oldest_dup_silverswords <- data.frame(Group = integer(), Oldest_Tip = character(), Oldest_Age = numeric(), stringsAsFactors = FALSE)
+
+# Identify the youngest tips in each group and prepare them for removal
+drop_youngest_subspecies_silverswords <- unlist(lapply(seq_along(tip_position), function(group_index) {
+  tip_indices <- tip_position[[group_index]]
+  
+  # Get node ages for all tips in the current group
+  node_ages <- sapply(tip_indices, function(pos) {
+    get_node_age_at_position(silversword, pos)
+  })
+  
+  # Find the index of the oldest tip (to keep)
+  oldest_tip_index <- which.max(node_ages)
+  
+  # Add the oldest tip and its age to the summary table
+summary_table_oldest_dup_silverswords <<- rbind(
+    summary_table_oldest_dup_silverswords,
+    data.frame(
+      Group = group_index,
+      Oldest_Tip = silversword$tip.label[tip_indices[oldest_tip_index]],
+      Oldest_Age = node_ages[oldest_tip_index],
+      stringsAsFactors = FALSE
+    )
+  )
+  
+  # Return all other tips (youngest) for removal
+  tip_indices[-oldest_tip_index]
+}))
+
+# 3. Drop the youngest tips
+silversword <- ape::drop.tip(
+  phy = silversword,
+  tip = silversword$tip.label[drop_youngest_subspecies_silverswords]
+)
+
+# 4. Modify tip labels to remove everything after and including the second underscore
+silversword$tip.label <- gsub("^([^_]*_[^_]*).*", "\\1", silversword$tip.label)
+
+# 5. Review the changes
+# Be sure to check the tip labels (only one species (ie subspecies narrowed to one) and tip labels correct to match tip_label column in endemicity status dataframe
+silversword[["tip.label"]]
+
+# Print the summary table for manual review
+print(summary_table_oldest_dup_silverswords)
+```
+
+### **Bidens**
+
+First deal with the unnamed species. There is one unnamed species from the tree on Hawaii (BidspnovLF12810G90). There are another six species that are that are unnamed and are not on Hawaii. These can be given temporary, fictional names for the purposes of naming standardization, but will not be included in the island data set once extracted. Name is Bid- rather than Bidens\_- because it will be changed below with the other tips in the tree.
+
+```{r}
+bidens$tip.label[grep(pattern = "Bidsp", x = bidens$tip.label)] <- c(
+  "Bidbutaud",
+  "Bidstarbuckis-a",
+  "Bidstarbuckis-b",
+  "Bidtaputuarai",
+  "Bidspa",
+  "Bidspb",
+  "Bidspnovoahu"
+)
+```
+
+Standardize the tip labels to conform to DAISIEprep.
+
+```{r}
+# split the tip labels by capital letters as they differentiate the genus name from the collector name and collector tag
+species_bidens <- gsub("([[:upper:]])", " \\1", bidens$tip.label)
+# split names by white space
+species_split_bidens <- strsplit(x = species_bidens, split = " ")
+
+# keep only the genus and species name
+species_name_bidens <- lapply(species_split_bidens, "[[", 2)
+
+# rename groups by identifiers
+species_name_bidens <- gsub(
+  pattern = "Bid",
+  replacement = "Bidens_",
+  x = species_name_bidens
+)
+species_name_bidens <- gsub(
+  pattern = "Coreop",
+  replacement = "Coreopsis_",
+  x = species_name_bidens
+)
+species_name_bidens <- gsub(
+  pattern = "Cos",
+  replacement = "Cosmos_",
+  x = species_name_bidens
+)
+species_name_bidens <- gsub(
+  pattern = "Fit",
+  replacement = "Fitchia_",
+  x = species_name_bidens
+)
+species_name_bidens <- gsub(
+  pattern = "Opa",
+  replacement = "Oparanthus_",
+  x = species_name_bidens
+)
+species_name_bidens <- gsub(
+  pattern = "Coreoc",
+  replacement = "Coreocarpus_",
+  x = species_name_bidens
+)
+species_name_bidens <- gsub(
+  pattern = "Hen",
+  replacement = "Hendricksonia_",
+  x = species_name_bidens
+)
+
+# rename those species that do not fit identifiers
+species_name_bidens[grep(pattern = "Glossocardia", x = species_name_bidens)] <-
+  "Glossocardia_bidens"
+species_name_bidens[grep(pattern = "Corcyclocarpa", x = species_name_bidens)] <-
+  "Coreopsis_cyclocarpa"
+species_name_bidens[grep(pattern = "Corveticde", x = species_name_bidens)] <-
+  "Coreopsis_verticillata"
+
+# rename species with truncated species names in combination with subspecies
+species_name_bidens[grep(pattern = "Bidens_campylopenta", x = species_name_bidens)] <-
+  "Bidens_campylotheca"
+species_name_bidens[grep(pattern = "Bidens_campyloth", x = species_name_bidens)] <-
+  "Bidens_campylotheca"
+species_name_bidens[grep(pattern = "Bidens_campylothecacampylo", x = species_name_bidens)] <-
+  "Bidens_campylotheca"
+species_name_bidens[grep(pattern = "Bidens_micrankaleal", x = species_name_bidens)] <-
+  "Bidens_micrantha"
+species_name_bidens[grep(pattern = "Bidens_micranthacteno", x = species_name_bidens)] <-
+  "Bidens_micrantha"
+species_name_bidens[grep(pattern = "Bidens_hillebrahillebra", x = species_name_bidens)] <-
+  "Bidens_hillebrandiana"
+species_name_bidens[grep(pattern = "Bidens_hillebrapolyceph", x = species_name_bidens)] <-
+  "Bidens_hillebrandiana"
+species_name_bidens[grep(pattern = "Bidens_menziesiifiliform", x = species_name_bidens)] <-
+  "Bidens_menziesii"
+species_name_bidens[grep(pattern = "Bidens_menziesiimenziesii", x = species_name_bidens)] <-
+  "Bidens_menziesii"
+species_name_bidens[grep(pattern = "Bidens_forbeskahilien", x = species_name_bidens)] <-
+  "Bidens_forbesii"
+
+# remove any numbers left in the species names
+species_name_bidens <- gsub(pattern = "[0-9]", replacement = "", x = species_name_bidens)
+
+# create data frame linking original names, standardized names, and positions
+tip_data <- data.frame(
+  original_name = bidens$tip.label,
+  standardized_name = species_name_bidens,
+  position = 1:length(bidens$tip.label),
+  stringsAsFactors = FALSE
+)
+
+# update tree tip labels to standardized names
+bidens$tip.label <- species_name_bidens
+
+# inspect the tip labels
+bidens[["tip.label"]]
+```
+
+Remove multiple samples of the same species. Some of these do not form monophyletic species so for this example we choose one of the species samples in the tree with the oldest ages and drop the remaining samples (tips). This also stops species richness being inflated, as with the silverswords above, by only having one tip in the tree per species.
+
+First identify the duplicates. Then get the age for each tip in a group (of duplicate/multiple samples per species), compare to find the oldest, and then drop the younger tips.
+
+```{r}
+# Identify duplicates. Group tips by standardized name and keep only groups with duplicates
+duplicate_groups <- split(tip_data, tip_data$standardized_name)
+duplicate_groups <- duplicate_groups[sapply(duplicate_groups, nrow) > 1]
+
+# Function to get branch length (age) for a tip
+get_node_age_at_position <- function(tree, position) {
+  node_number <- position
+  edge_index <- which(tree$edge[, 2] == node_number)
+  return(tree$edge.length[edge_index])
+}
+# For each duplicate group:
+positions_to_drop <- unlist(lapply(seq_along(duplicate_groups), function(group_index) {
+  group <- duplicate_groups[[group_index]]
+  
+  # Get node ages for all tips in the current group
+  node_ages <- sapply(group$position, function(pos) {
+    get_node_age_at_position(bidens, pos)
+  })
+  
+  # Find the index of the oldest tip (to keep)
+  oldest_tip_index <- which.max(node_ages)
+  
+  # Return positions to drop (all except the oldest)
+  group$position[-oldest_tip_index]
+}))
+
+# Remove duplicate tips from tree
+bidens <- ape::drop.tip(
+  phy = bidens,
+  tip = positions_to_drop
+)
+
+```
+
+Final name standardization. Then manually review the tip labels to check only one sample per species (duplicates are removed) and that the tip labels match the tip_label column in endemicity status dataframe.
+
+```{r}
+# Modify tip labels to remove everything after and including the second underscore
+bidens$tip.label <- gsub("^([^_]*_[^_]*).*", "\\1", bidens$tip.label)
+
+# Review the changes
+# Be sure to check the tip labels (only one species (ie subspecies narrowed to one) and tip labels correct to match tip_label column in endemicity status dataframe
+bidens[["tip.label"]]
+
+```
+
+### **New Island Asteraceae Phylogeny: Remya, Keysseria, Tetramolopium, Pseudognaphalium, Adenostemma**
+
+We need to standardize the names to prepare the phylogeny for DAISIEprep. Where we only want the Genus_species.
+
+For all non-endemic species, we need to add the archipelago to the name so we can id the island taxa from the mainland after name standardization. The only non-endemic on Hawaii is Adenostemma viscosum (sample name Adenostemma_viscosum_Maui_L1177_B). We want to standardize to Adenostemma_viscosum-Hawaii.
+
+```{r}
+# Manually standardize the non-endemic native Adenostemma_viscosum_Maui_L1177_B
+islandAsteraceae$tip.label <- gsub("Adenostemma_viscosum_Maui_L1177_B", "Adenostemma_viscosum-Hawaii", islandAsteraceae$tip.label)
+```
+
+Additionally, Pseudognaphalium sandwicensium is a very interesting HI endemic in that its unclear if this morphologically variable species is one species from a single colonization event or actually separate colonization events (see notes in Hawaii Flora and Smissen 2023). To test this, we built a Gnaphalieae-tribal phylogeny and found that, with our sampling, Pseudognaphalium sandwicensium is at least three independent colonization events: (a) Pseudognaphalium_sandwicensium_Molokai_L1139_A and Pseudognaphalium_sandwicensium_Hawaii_L1140_A, (b) Pseudognaphalium_sandwicensium_Maui_L1119_D, and (c) Pseudognaphalium_sandwicensium_Hawaii_L1121_B. One of our samples - Pseudognaphalium_sandwicensium_Oahu_L1118_A - falls within a Pseudognaphalium luteoalbum clade. After reviewing this specimen mophology and collection locality (military base) and discussing with local experts, we believe this sample might be miss identified as Pseudognaphalium luteoalbum.
+
+So we are going to add Pseudognaphalium_sandwicensium-a, Pseudognaphalium_sandwicensium-b, and Pseudognaphalium_sandwicensium-c to our Hawaiian endemicity table and update the phylogeny labels to match.
+
+```{r}
+# update Hawaiian endemicity table to capture 3 independent lineages
+Hawaiian_endemicity <- Hawaiian_endemicity %>%
+  mutate(tip_labels = ifelse(tip_labels == "Pseudognaphalium_sandwicensium", 
+                             "Pseudognaphalium_sandwicensium-a", 
+                             tip_labels)) %>%
+  bind_rows(tibble(
+    tip_labels = c("Pseudognaphalium_sandwicensium-b", "Pseudognaphalium_sandwicensium-c"),
+    tip_endemicity_status = c("endemic", "endemic")
+  ))
+```
+
+Standardize the names and match the samples to the a,b,c lineages
+
+```{r}
+# Pseudognaphalium_sandwicensium-a
+islandAsteraceae$tip.label <- gsub("Pseudognaphalium_sandwicensium_Molokai_L1139_A", "Pseudognaphalium_sandwicensium-a_1", islandAsteraceae$tip.label)
+islandAsteraceae$tip.label <- gsub("Pseudognaphalium_sandwicensium_Hawaii_L1140_A", "Pseudognaphalium_sandwicensium-a_2", islandAsteraceae$tip.label)
+
+# Pseudognaphalium_sandwicensium-b
+islandAsteraceae$tip.label <- gsub("Pseudognaphalium_sandwicensium_Maui_L1119_D", "Pseudognaphalium_sandwicensium-b", islandAsteraceae$tip.label)
+
+# Pseudognaphalium_sandwicensium-c
+islandAsteraceae$tip.label <- gsub("Pseudognaphalium_sandwicensium_Hawaii_L1121_B", "Pseudognaphalium_sandwicensium-c", islandAsteraceae$tip.label)
+
+```
+
+Remove sample L1118 which is a suspected misidentification.
+
+```{r}
+# Manually remove the L1118 sample
+islandAsteraceae <- ape::drop.tip(phy = islandAsteraceae, tip = "Pseudognaphalium_sandwicensium_Oahu_L1118_A")
+```
+
+Deal with multiple samples per species. Select the tip with the oldest node age for the among the duplicates for each species. The drop the younger tips for each list. Manually review which tip was selected as the oldest.
+
+```{r}
+# Split the tip labels based on "_"
+split_names_islandAsteraceae <- strsplit(x = islandAsteraceae$tip.label, split = "_")
+
+# Remove all the Subfamily and tribe names
+# Function to remove elements ending in "eae"
+remove_eae <- function(name_parts) {
+  name_parts[!grepl("eae$", name_parts)]
+}
+# note: Cyclolepis will not standardize correctly but we can ignore since its an outgroup
+
+# Apply the removal function and combine the remaining parts to get Genus_species
+genus_species_names_islandAsteraceae <- sapply(split_names_islandAsteraceae, function(parts) {
+  cleaned_parts <- remove_eae(parts)
+  paste(cleaned_parts[1], cleaned_parts[2], sep = "_")
+})
+
+# Identify duplicate species
+island_multi_species_islandAsteraceae <- unique(genus_species_names_islandAsteraceae[duplicated(genus_species_names_islandAsteraceae)])
+
+# Get the positions of the duplicates
+duplicate_positions <- lapply(island_multi_species_islandAsteraceae, function(species) {
+  which(genus_species_names_islandAsteraceae == species)
+})
+
+# Function to get the node age for a given tip position
+get_node_age_at_position <- function(tree, position) {
+  # Get the node number corresponding to the tip position directly
+  node_number <- position  
+  # Get the length of the edge connecting to the parent node
+  edge_length <- tree$edge.length[which(tree$edge[, 2] == node_number)]
+  # Return the edge length as the node age (time to the root)
+  return(edge_length)
+}
+
+# Initialize a summary table
+summary_table_oldest_dup_islandAsteraceae <- data.frame(Group = integer(), Oldest_Tip = character(), Oldest_Age = numeric(), stringsAsFactors = FALSE)
+
+# Identify the youngest tips in each group and prepare them for removal
+drop_youngest_subspecies_islandAsteraceae<- unlist(lapply(seq_along(duplicate_positions), function(group_index) {
+  tip_indices <- duplicate_positions[[group_index]]
+  # Get node ages for all tips in the current group
+  node_ages <- sapply(tip_indices, function(pos) {
+    get_node_age_at_position(islandAsteraceae, pos)
+  })
+  # Find the index of the oldest tip (to keep)
+  oldest_tip_index <- which.max(node_ages)
+  # Add the oldest tip and its age to the summary table
+summary_table_oldest_dup_islandAsteraceae <<- rbind(
+    summary_table_oldest_dup_islandAsteraceae,
+    data.frame(
+      Group = group_index,
+      Oldest_Tip = islandAsteraceae$tip.label[tip_indices[oldest_tip_index]],
+      Oldest_Age = node_ages[oldest_tip_index],
+      stringsAsFactors = FALSE
+    )
+  )
+  # Return all other tips (youngest) for removal
+  tip_indices[-oldest_tip_index]
+}))
+
+# Drop the youngest tips
+islandAsteraceae <- ape::drop.tip(
+  phy = islandAsteraceae,
+  tip = islandAsteraceae$tip.label[drop_youngest_subspecies_islandAsteraceae]
+)
+
+# Print the summary table for manual review
+print(summary_table_oldest_dup_islandAsteraceae)
+
+```
+
+Update the tip labels to the standardized name.
+
+```{r}
+# After dropping tips, standardize the names directly from the current tip labels
+split_names_islandAsteraceae <- strsplit(x = islandAsteraceae$tip.label, split = "_")
+
+# same function as above 
+remove_eae <- function(name_parts) {
+  name_parts[!grepl("eae$", name_parts)]
+}
+
+# Apply the standardization directly to the current tip labels
+standardized_names <- sapply(split_names_islandAsteraceae, function(parts) {
+  cleaned_parts <- remove_eae(parts)
+  paste(cleaned_parts[1], cleaned_parts[2], sep = "_")
+})
+
+# Directly update the tree's tip labels
+islandAsteraceae$tip.label <- standardized_names
+
+```
+
+## 1c Combine phylogeny and endemicity status create_endemicity_status()
+
+Convert the trees to phylo4 objects
+
+```{r}
+hesperomannia <- phylobase::phylo4(hesperomannia)
+silversword <- phylobase::phylo4(silversword)
+bidens <- phylobase::phylo4(bidens)
+islandAsteraceae <- phylobase::phylo4(islandAsteraceae)
+```
+
+Create endemicity status data frame.
+
+create_endemicity_status() creates a data frame with the endemicity status (either 'endemic', 'nonendemic', 'not_present') of every species in the phylogeny using a phylogeny and a data frame of the island species and their endemicity (either 'endemic' or 'nonendemic') provided.
+
+```{r}
+endemicity_status_hesperomannia <- DAISIEprep::create_endemicity_status( # nolint
+  phylo = hesperomannia,
+  island_species = Hawaiian_endemicity
+)
+
+endemicity_status_silversword <- DAISIEprep::create_endemicity_status(
+  phylo = silversword,
+  island_species = Hawaiian_endemicity
+)
+
+endemicity_status_bidens <- DAISIEprep::create_endemicity_status(
+  phylo = bidens,
+  island_species = Hawaiian_endemicity
+)
+
+endemicity_status_islandAsteraceae <- DAISIEprep::create_endemicity_status(
+  phylo = islandAsteraceae,
+  island_species = Hawaiian_endemicity
+)
+```
+
+Combine tree and endemicity status
+
+```{r}
+hesperomannia_phylod <- phylobase::phylo4d(
+  hesperomannia,
+  endemicity_status_hesperomannia
+)
+
+silversword_phylod <- phylobase::phylo4d(
+  silversword,
+  endemicity_status_silversword
+)
+
+bidens_phylod <- phylobase::phylo4d(
+  bidens,
+  endemicity_status_bidens
+)
+
+islandAsteraceae_phylod <- phylobase::phylo4d(
+  islandAsteraceae,
+  endemicity_status_islandAsteraceae
+)
+```
+
+Visually check the trees
+
+```{r}
+# Run on command and display in external plot window
+plot_phylod(phylod = hesperomannia_phylod)
+plot_phylod(phylod = silversword_phylod)
+plot_phylod(phylod = bidens_phylod)
+plot_phylod(phylod = islandAsteraceae_phylod)
+```
+
+# 2. Build island_tbl for all lineages
+
+## Lineages with dated phylogenies
+
+**A. Reconstruct ASR with `add_asr_node_states()`**
+
+Reconstruct geographic ancestral states for extraction with asr
+
+```{r}
+hesperomannia_phylod <- DAISIEprep::add_asr_node_states(
+  phylod = hesperomannia_phylod,
+  asr_method = "mk",
+  tie_preference = "mainland"
+)
+
+silversword_phylod <- DAISIEprep::add_asr_node_states(
+  phylod = silversword_phylod,
+  asr_method = "mk",
+  tie_preference = "mainland"
+)
+
+bidens_phylod <- DAISIEprep::add_asr_node_states(
+  phylod = bidens_phylod,
+  asr_method = "mk",
+  tie_preference = "mainland"
+)
+
+islandAsteraceae_phylod <- DAISIEprep::add_asr_node_states(
+  phylod = islandAsteraceae_phylod,
+  asr_method = "mk",
+  tie_preference = "mainland"
+)
+```
+
+**B. Extract island community and adding missing species**
+
+Start building the `island_tbl`. For each lineage, (1) extract the island community with `extract_island_species()` and (2) Add any missing species with `add_missing_species()`
+
+Hesperomannia:
+
+```{r}
+# extract island community using asr algorithm
+island_tbl <- DAISIEprep::extract_island_species(
+  phylod = hesperomannia_phylod,
+  extraction_method = "asr"
+)
+
+# assign missing species to Hesperomannia colonists
+island_tbl <- DAISIEprep::add_missing_species(
+  island_tbl = island_tbl,
+  num_missing_species = 2,
+  species_to_add_to = "Hesperomannia_oahuensis"
+)
+
+# manually set clade name
+# Access the clade_name column
+clade_column <- island_tbl@island_tbl$clade_name
+# Find the index where the value is "Hesperomannia_oahuensis"
+index_to_replace <- which(clade_column == "Hesperomannia_oahuensis")
+# Replace the value with "Hesperomannia"
+clade_column[index_to_replace] <- "Hesperomannia"
+# Update the clade_name column in the S4 object
+island_tbl@island_tbl$clade_name <- clade_column
+```
+
+Silverswords:
+
+```{r}
+# extract island community using asr algorithm
+island_tbl <- DAISIEprep::extract_island_species(
+  phylod = silversword_phylod,
+  extraction_method = "asr",
+  island_tbl = island_tbl
+)
+
+# assign missing species to silverswords colonists
+island_tbl <- DAISIEprep::add_missing_species(
+  island_tbl = island_tbl,
+  num_missing_species = 9,
+  species_to_add_to = "Dubautia_arborea"
+)
+
+# manually set clade name
+# Access the clade_name column
+clade_column <- island_tbl@island_tbl$clade_name
+# Find the index where the value is "Dubautia_arborea"
+index_to_replace <- which(clade_column == "Dubautia_arborea")
+# Replace the value with genus
+clade_column[index_to_replace] <- "Silverswords"
+# Update the clade_name column in the S4 object
+island_tbl@island_tbl$clade_name <- clade_column
+```
+
+Bidens:
+
+```{r}
+# extract island community using asr algorithm
+island_tbl <- DAISIEprep::extract_island_species(
+  phylod = bidens_phylod,
+  extraction_method = "asr",
+  island_tbl = island_tbl
+)
+
+# assign missing species to bidens colonists
+island_tbl <- DAISIEprep::add_missing_species(
+  island_tbl = island_tbl,
+  num_missing_species = 1,
+  species_to_add_to = "Bidens_amplectens"
+)
+
+# manually set clade name
+# Access the clade_name column
+clade_column <- island_tbl@island_tbl$clade_name
+# Find the index where the value is "Bidens_amplectens"
+index_to_replace <- which(clade_column == "Bidens_amplectens")
+# Replace the value with genus
+clade_column[index_to_replace] <- "Bidens"
+# Update the clade_name column in the S4 object
+island_tbl@island_tbl$clade_name <- clade_column
+```
+
+Island Asteraceae: Adenostemma, Artemisia, Keysseria, Pseudognaphalium (x3), Remya, Tetramolopium
+
+Extract the island community. Assign missing species. Update the clade names.
+
+Note: We know from our Gnaphalieae-tribe phylogeny that the endemic Pseudognaphalium is at least three colonization events, but due to low sampling in our Asteraceae-wide phylogeny Pseudognaphalium_sandwicensium-b and Pseudognaphalium_sandwicensium-c are sister and DAISIE will interpret these two tips as endemics in one clade. So we need to force the seperation of the the endemic singletons.
+
+```{r}
+# extract island community using asr algorithm
+island_tbl <- DAISIEprep::extract_island_species(
+  phylod = islandAsteraceae_phylod,
+  extraction_method = "asr",
+  island_tbl = island_tbl
+)
+
+# remove th clade lumping Pseudognaphalium_sandwicensium-b and c
+island_tbl <- rm_island_colonist(
+  island_tbl = island_tbl,
+  clade_name = "Pseudognaphalium_sandwicensium-b"
+)
+
+# manually extract both endemic singletons
+islandAst_col_Psb <- DAISIEprep::extract_endemic_singleton(
+  phylod = islandAsteraceae_phylod, 
+  species_label = "Pseudognaphalium_sandwicensium-b")
+islandAst_col_Psc <- DAISIEprep::extract_endemic_singleton(
+  phylod = islandAsteraceae_phylod, 
+  species_label = "Pseudognaphalium_sandwicensium-c")
+
+# add these island colonists to the table
+island_tbl <- bind_colonist_to_tbl(
+  island_colonist = islandAst_col_Psb,
+  island_tbl = island_tbl
+)
+island_tbl <- bind_colonist_to_tbl(
+  island_colonist = islandAst_col_Psc,
+  island_tbl = island_tbl
+)
+
+# assign missing species to Tetramolopium colonists
+island_tbl <- DAISIEprep::add_missing_species(
+  island_tbl = island_tbl,
+  num_missing_species = 8,
+  species_to_add_to = "Tetramolopium_rockii"
+)
+# no missing species for Artemisia, Remya, Keysseria, Pseudognaphalium, Adenostemma
+
+# Manually rename clades
+
+# manually set clade name Tetramolopium
+clade_column <- island_tbl@island_tbl$clade_name
+index_to_replace <- which(clade_column == "Tetramolopium_conyzoides")
+clade_column[index_to_replace] <- "Tetramolopium"
+island_tbl@island_tbl$clade_name <- clade_column
+
+# manually set clade name Artemisia
+clade_column <- island_tbl@island_tbl$clade_name
+index_to_replace <- which(clade_column == "Artemisia_australis")
+clade_column[index_to_replace] <- "Artemisia"
+island_tbl@island_tbl$clade_name <- clade_column
+
+# manually set clade name Remya
+clade_column <- island_tbl@island_tbl$clade_name
+index_to_replace <- which(clade_column == "Remya_mauiensis")
+clade_column[index_to_replace] <- "Remya"
+island_tbl@island_tbl$clade_name <- clade_column
+
+# manually set clade name Keysseria
+clade_column <- island_tbl@island_tbl$clade_name
+index_to_replace <- which(clade_column == "Keysseria_erici")
+clade_column[index_to_replace] <- "Keysseria"
+island_tbl@island_tbl$clade_name <- clade_column
+
+# manually set clade name Adenostemma
+clade_column <- island_tbl@island_tbl$clade_name
+index_to_replace <- which(clade_column == "Adenostemma_viscosum-Hawaii")
+clade_column[index_to_replace] <- "Adenostemma"
+island_tbl@island_tbl$clade_name <- clade_column
+
+# Pseudognaphalium lineages already named
+
+```
+
+## Lineages with in-text age estimates or diversity data only
+
+Manually add lineages that have only in-text age estimates or diversity data only with `add_island_colonist()`. See notes on counting missing species carefully: <https://joshwlambert.github.io/DAISIEprep/articles/Tutorial.html#adding-missing-species>
+
+Lipochaeta:
+
+The dated phylogeny in Edwards (2018) is not publicly available and have contacted authors several times with no response.
+
+Therefore, we make use of the age estimates report in the text of the paper.In-text age: "The molecular clock analyses recovered the stem age of all taxa from the Hawaiian Island as 0.73--1.79 million years, Wollastonia s.l. (including Lipochaeta) as 1.19--1.79 million years"
+
+Number of species: 20
+
+```{r}
+# add Lipochaeta-Melanthera alliance, in-text stem age (1.26 Ma)
+island_tbl <- DAISIEprep::add_island_colonist(
+  island_tbl = island_tbl,
+  clade_name = "Lipochaeta",
+  status = "endemic",
+  # 20 species in radiation - 1 colonization time
+  missing_species = 19,
+  col_time = 1.26,
+  col_max_age = TRUE,
+  branching_times = NA_real_,
+  min_age = NA_real_,
+  species = c(
+    "Lipochaeta_bryanii",
+    "Lipochaeta_connata",
+    "Lipochaeta_degeneri",
+    "Lipochaeta_fauriei",
+    "Lipochaeta_heterophylla",
+    "Lipochaeta_integrifolia",
+    "Lipochaeta_kamolensis",
+    "Lipochaeta_lavarum",
+    "Lipochaeta_lobata",
+    "Lipochaeta_micrantha",
+    "Lipochaeta_perdita",
+    "Lipochaeta_populifolia",
+    "Lipochaeta_remyi",
+    "Lipochaeta_rockii",
+    "Lipochaeta_subcordata",
+    "Lipochaeta_succulenta",
+    "Lipochaeta_tenuifolia",
+    "Lipochaeta_tenuis",
+    "Lipochaeta_venosa",
+    "Lipochaeta_waimeaensis"
+  ),
+  clade_type = 1
+)
+```
+
+Save the island table
+
+```{r}
+# convert list-columns to character
+island_tbl_clean <- island_tbl@island_tbl %>%
+  mutate(across(where(is.list), ~ sapply(., function(x) paste(x, collapse = ","))))
+# save
+write_xlsx(island_tbl_clean, "../data/Hawaii_DAISIE_lineages.xlsx")
+```
+
+# 3. Create DAISIE data table
+
+Convert `island_tbl` to a DAISIE data list - input data of the DAISIE inference model - with `create_daisie_data()`.Need to provide and specify the following:
+
+-   `island_tbl` with all the lineages
+
+-   island age- number of mainland species
+
+-   precise colonization times: whether the colonisation times extracted from the phylogenetic data should be considered precise or max ages
+
+Set island age to 6.15 Mya (Lim 2017; <https://doi.org/10.1038/nature21675>)
+
+Set mainland pool to 7,000 species.
+
+```{r}
+island_age <- 6.15
+num_mainland_species <- 7000
+```
+
+Convert to daisie data list
+
+```{r}
+Hawaii_DAISIE_datalist <- DAISIEprep::create_daisie_data(
+  data = island_tbl,
+  island_age = island_age,
+  num_mainland_species = num_mainland_species, 
+  num_clade_types = 1,
+  list_type2_clades = NA,
+  epss = 1e-05,
+  precise_col_time = FALSE # Note we are setting here FALSE, makes every colonist a max age colonistion
+)
+```
+
+Create a version where colonizations times are precise
+
+```{r}
+Hawaii_DAISIE_datalist_precise <- DAISIEprep::create_daisie_data(
+  data = island_tbl,
+  island_age = island_age,
+  num_mainland_species = num_mainland_species, 
+  num_clade_types = 1,
+  list_type2_clades = NA,
+  epss = 1e-05,
+  precise_col_time = TRUE 
+)
+```
+
+Above is the standard set up. We also want to set models that allow for decoupled rates for certain lineages. For this we set a lineage as "type2". See function page on how to specify: <https://joshwlambert.github.io/DAISIEprep/reference/create_daisie_data.html>
+
+Create a daisie data list with the Silverswords allowed to have distinct macroevolutionary rates.
+
+```{r}
+Hawaii_DAISIE_datalist_silversword <- DAISIEprep::create_daisie_data(
+  data = island_tbl,
+  island_age = island_age,
+  num_mainland_species = num_mainland_species, 
+  num_clade_types = 2,
+  list_type2_clades = "Silverswords",
+  epss = 1e-05,
+  precise_col_time = FALSE
+)
+```
+
+Create a daisie data list with the Bidens allowed to have distinct macroevolutionary rates.
+
+```{r}
+Hawaii_DAISIE_datalist_bidens <- DAISIEprep::create_daisie_data(
+  data = island_tbl,
+  island_age = island_age,
+  num_mainland_species = num_mainland_species, 
+  num_clade_types = 2,
+  list_type2_clades = "Bidens",
+  epss = 1e-05,
+  precise_col_time = FALSE
+)
+```
+
+Create a daisie data list with Lipochaeta allowed to have distinct macroevolutionary rates.
+
+```{r}
+Hawaii_DAISIE_datalist_Lipochaeta <- DAISIEprep::create_daisie_data(
+  data = island_tbl,
+  island_age = island_age,
+  num_mainland_species = num_mainland_species, 
+  num_clade_types = 2,
+  list_type2_clades = "Lipochaeta",
+  epss = 1e-05,
+  precise_col_time = FALSE
+)
+```
+
+Save the DAISIE datalists
+
+```{r}
+save(Hawaii_DAISIE_datalist, file = "../data/Hawaii_DAISIE_datalist.Rdata")
+save(Hawaii_DAISIE_datalist_precise, file = "../data/Hawaii_DAISIE_datalist_precise.Rdata")
+save(Hawaii_DAISIE_datalist_silversword, file = "../data/Hawaii_DAISIE_datalist_silversword.Rdata")
+save(Hawaii_DAISIE_datalist_bidens, file = "../data/Hawaii_DAISIE_datalist_bidens.Rdata")
+save(Hawaii_DAISIE_datalist_Lipochaeta, file = "../data/Hawaii_DAISIE_datalist_Lipochaeta.Rdata")
+```
+
+## Plot colonization times for entire community
+
+```{r}
+plot_colonisation(island_tbl, island_age = 6.15)
+```
+
+# 4. DAISIE model (preliminary)
+
+Visualize the data
+
+```{r}
+DAISIE_plot_island(Hawaii_DAISIE_datalist)
+```
+
+## Basic DAISIE model overview
+
+To fit a DAISIE model we need to specify the following functions:
+
+-   `datalist` - The name of the DAISIE datalist (Hawaii_DAISIE_data_list)
+
+-   `initparsopt` - these are the initial values from the parameters for which the likelihood will be optimised. Its recommended to try a variety of initial starting parameters to ensure the optimum is found. In DAISIE the parameters have the following position:
+
+    1.  Rate of cladogenesis (per species on the island per time unit)
+    2.  Rate of extinction (per species on the island per time unit)
+    3.  Carrying-capacity (K') - maximum number of species any clade can reach on the island for CS models; maximum number of species on the island across all clades for IW models.
+    4.  Rate of colonisation (per species on the mainland per time unit)
+    5.  Rate of anagenesis (per species on the island per time unit)
+
+-   `idparsopt` - The position of the parameters to optimise (e.g. to optimize cladogenesis and anagenesis only c(1,5).
+
+-   `parsfix` - If parameters are being fixed, specify here the value (e.g. if fixing K' to Inf and fixing anagenesis to 0 - c(Inf,0).
+
+-   `idparsfix` - The position of the paratemers fixed (e.g. to fix K' and anagenesis c(3,5)).
+
+-   `ddmodel` - Set 0 for diversity-independent models; 11 for diversity-dependent models (IW and CS) where cladogenesis and colonisation decline linearly with diversity. There are other options.
+
+## Diversity-independent model (DI)
+
+Clade-specific diversity-independent model
+
+```{r}
+Hawaii_DI <- DAISIE_ML(
+  datalist = Hawaii_DAISIE_datalist,
+  initparsopt = c(1, 1, 0.001, 1),
+  idparsopt = c(1,2,4,5),
+  ddmodel = 0,
+  parsfix = Inf,
+  idparsfix = 3,
+  jitter = 1e-5
+)
+Hawaii_DI
+```
+
+loglik = -201.8056; df = 4
+
+```{r}
+Hawaii_DI_sims <- DAISIE_sim(
+  time = 6.15,
+  M = 7000,
+  # rates from model (Hawaii_DI) output
+  pars = c(1.71189, 1.286223, Inf, 0.000756, 3.7674),
+  replicates= 100,
+  plot_sims = TRUE
+)
+
+DAISIE_plot_sims(Hawaii_DI_sims)
+```
+
+```{r, eval=F}
+# Open a PDF graphics device
+pdf(file = "../outputs/test.pdf", width = 8, height = 8.5)  # width and height are in inches
+
+# Generate the plot
+DAISIE_plot_sims(Hawaii_DI_sims)
+
+# Close the graphics device
+dev.off()
+```
+
+## Diversity dependence model (DD)
+
+Clade-specific diversity-dependent model
+
+```{r}
+Hawaii_DD <- DAISIE::DAISIE_ML(
+  datalist = Hawaii_DAISIE_datalist,
+  initparsopt = c(1, 1, 100, 0.1, 1),
+  idparsopt = 1:5,
+  parsfix = NULL,
+  idparsfix = NULL,
+  # ddmodel = 11: linear diversity-dependence in speciation and immigration rate
+  ddmodel = 11,
+  jitter = 1e-5
+)
+Hawaii_DD
+```
+
+loglik = -199.3909; df = 5
+
+```{r}
+Hawaii_DD_sims <- DAISIE_sim(
+  time = 6.15,
+  M = 7000,
+  # rates from model (Hawaii_DD) output
+  pars = c(2.351557, 1.398806, 74.29875, 0.000618, 4.393528),
+  divdepmodel = "CS",
+  replicates= 100,
+  plot_sims = TRUE
+)
+DAISIE_plot_sims(Hawaii_DD_sims)
+```
+
+## Diversity-independent model (DI) with Silverswords having separate rates
+
+No diversity dependence, but allow silverswords to have separate rates of cladogenesis and extinction.
+
+```{r}
+Hawaii_DI_silverswords <- DAISIE_ML(
+  datalist = Hawaii_DAISIE_datalist_silversword,
+  ddmodel = 0,
+  initparsopt = c(1,1,0.001,1,1,1),
+  idparsopt = c(1,2,4,5,6,7),
+  parsfix = c(Inf,0.1),
+  idparsfix = c(3,11), # 3=k, 11=prop mainland of silverwords
+  idparsnoshift = c(8,9,10),
+  jitter = 1e-5
+)
+Hawaii_DI_silverswords
+```
+
+loglik = -201.4246; df = 6
+
+```{r}
+Hawaii_DI_silverswords_sims <- DAISIE_sim(
+  time = 6.15,
+  M = 7000,
+  # rates from model (Hawaii_DI_silverwords) output
+  pars = c(1.924135, 1.614618, Inf, 0.000881, 4.004369,
+           1.441084, 0.9014047, Inf, 0.000881, 4.004369),
+  prop_type2_pool = 0.1,
+  replicates= 100,
+  plot_sims = TRUE
+)
+DAISIE_plot_sims(Hawaii_DI_silverswords_sims)
+```
+
+## Diversity-dependent model (DD) with Silverswords having separate rates
+
+Diversity dependent model where we optimize all parameters but let the silverswords have a seperate rate of cladogenesis.
+
+```{r}
+Hawaii_DD_silverswords <- DAISIE_ML(
+  datalist = Hawaii_DAISIE_datalist_silversword,
+  ddmodel = 11,
+  initparsopt = c(1,0.5,100,0.0005,1,0.5),
+  idparsopt = c(1,2,3,4,5,6),
+  parsfix = c(0.1),
+  idparsfix = c(11), # 11=prop mainland of silverwords
+  idparsnoshift = c(7,8,9,10),
+  jitter = 1e-5
+)
+Hawaii_DD_silverswords
+```
+
+loglik = -197.3479; df = 6
+
+```{r}
+Hawaii_DD_silverswords_sims <- DAISIE_sim(
+  time = 6.15,
+  M = 7000,
+  # rates from model (Hawaii_DD_silverwords) output
+  pars = c(2.550705, 1.65073, 55.31649, 0.000677, 4.719825,
+           3.940972, 1.65073, 55.31649, 0.000677, 4.719825),
+  prop_type2_pool = 0.1,
+  replicates= 100,
+  plot_sims = TRUE
+)
+DAISIE_plot_sims(Hawaii_DD_silverswords_sims)
+```
+
+```{r}
+# Open a PDF graphics device
+pdf(file = "../outputs/Hawaii_DD_silverswords_sims.pdf", width = 8, height = 8.5)  # width and height are in inches
+
+# Generate the plot
+DAISIE_plot_sims(Hawaii_DD_silverswords_sims)
+
+# Close the graphics device
+dev.off()
+```
+
+## Diversity-independent model (DI) with Bidens having separate rates
+
+No diversity dependence, but allow Bidens to have separate rates of cladogenesis and extinction.
+
+```{r}
+Hawaii_DI_bidens <- DAISIE_ML(
+  datalist = Hawaii_DAISIE_datalist_bidens,
+  ddmodel = 0,
+  initparsopt = c(1,1,0.0005,1,1.5,1),
+  idparsopt = c(1,2,4,5,6,7),
+  parsfix = c(Inf,0.1),
+  idparsfix = c(3,11), # 3=k, 11=prop mainland of bidens
+  idparsnoshift = c(8,9,10),
+  jitter = 1e-5
+)
+Hawaii_DI_bidens
+```
+
+loglik = -198.0252; df = 6
+
+```{r}
+Hawaii_DI_bidens_sims <- DAISIE_sim(
+  time = 6.15,
+  M = 7000,
+  # rates from model (Hawaii_DI_bidens) output
+  pars = c(2.083465, 1.780371, Inf, 0.000788, 3.755294, 
+           1.188882, 1.314546, Inf, 0.000788, 3.755294),
+  prop_type2_pool = 0.1,
+  replicates= 100,
+  plot_sims = TRUE
+)
+DAISIE_plot_sims(Hawaii_DI_bidens_sims, type = "all_species")
+DAISIE_plot_sims(Hawaii_DI_bidens_sims, type = "type1_species")
+DAISIE_plot_sims(Hawaii_DI_bidens_sims, type = "type2_species")
+```
+
+## Diversity-dependent model (DD) with Bidens having separate rates
+
+Diversity dependent model where we optimize all parameters but let the bidens have a separate rate of cladogenesis.
+
+```{r}
+Hawaii_DD_bidens <- DAISIE_ML(
+  datalist = Hawaii_DAISIE_datalist_bidens,
+  ddmodel = 11,
+  initparsopt = c(1,0.5,100,0.0005,1,0.5),
+  idparsopt = c(1,2,3,4,5,6),
+  parsfix = c(0.1),
+  idparsfix = c(11), # 11=prop mainland of bidens
+  idparsnoshift = c(7,8,9,10),
+  jitter = 1e-5
+)
+Hawaii_DD_bidens
+```
+
+loglik = -198.6938; df = 6
+
+```{r}
+Hawaii_DD_bidens_sims <- DAISIE_sim(
+  time = 6.15,
+  M = 7000,
+  # rates from model (Hawaii_DD_bidens) output
+  pars = c(2.319999, 1.362208, 64.20187, 0.000597, 4.511612, 
+           3.094495, 1.362208, 64.20187, 0.000597, 4.511612),
+  prop_type2_pool = 0.1,
+  replicates= 100,
+  plot_sims = TRUE
+)
+DAISIE_plot_sims(Hawaii_DD_bidens_sims)
+```
+
+# Model summary
+
+| Model                  | loglik    | df  | AIC      | Rank |
+|------------------------|-----------|-----|----------|------|
+| Hawaii_DI              | -201.8056 | 4   | 411.6112 | 5    |
+| Hawaii_DD              | -199.3909 | 5   | 408.7818 | 3    |
+| Hawaii_DI_silverswords | -201.4246 | 6   | 414.8492 | 6    |
+| Hawaii_DD_silverswords | -197.3479 | 6   | 406.6958 | 1    |
+| Hawaii_DI_bidens       | -198.0252 | 6   | 408.0504 | 2    |
+| Hawaii_DD_bidens       | -198.6938 | 6   | 409.3876 | 4    |

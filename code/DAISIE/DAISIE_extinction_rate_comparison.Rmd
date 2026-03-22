@@ -1,0 +1,286 @@
+---
+title: 'DAISIE'
+subtitle: 'Comparing modern extinction rate to background'
+output: html_document
+date: "2025-06-02"
+---
+
+```{r, echo = TRUE, message = FALSE, warning = FALSE}
+library(dplyr)
+library(ggplot2)
+library(knitr)
+library(kableExtra)
+library(writexl)
+```
+
+## Literature / Publications
+
+### Key References
+
+1.  **Pimm et al. 1995. Science.** [The Future of Biodiversity](https://www.science.org/doi/10.1126/science.269.5222.347)
+    -   E/MSY source
+    -   Established the methodology for calculating extinction rates using the E/MSY metric and proposed the widely cited baseline background rate of 1 E/MSY
+2.  **Barnosky et al. 2011. Nature.** [Has the Earth's sixth mass extinction already arrived?](https://www.nature.com/articles/nature09678)
+    -   Table 2: Methods of comparing present and past extinctions
+    -   Compare currently measured extinction rates to background rates assessed from fossil record with E/MSY
+    -   Section: Background rate comparisons
+        -   "A useful and widely applied metric has been E/MSY (extinctions per million species-years, as defined in refs 15 and 27). In this approach, background rates are estimated from fossil extinctions that took place in million-year-or-more time bins. For current rates, the proportion of species extinct in a comparatively very short time (one to a few centuries) is extrapolated to predict what the rate would be over a million years."
+3.  **Pimm et al. 2014. Science.** [The biodiversity of species and their rates of extinction, distribution, and protection](https://www.science.org/doi/10.1126/science.1246752)
+    -   Uses E/MSY for current rate
+4.  **Ceballos et al. 2015. Science.** [Accelerated modern human--induced species losses: Entering the sixth mass extinction](https://www.science.org/doi/epdf/10.1126/sciadv.1400253)
+    -   Uses E/MSY for current rate
+
+## E/MSY (Extinctions per Million Species-Years)
+
+**E/MSY** is a standardized metric used to quantify and compare extinction rates across different time periods and taxonomic groups.
+
+**Formula:**
+
+```         
+E/MSY = (Number of extinctions / (Number of species at risk × Time period in years)) × 1,000,000
+```
+
+## E/MSY for Hawaiian Asteraceae
+
+Input data
+
+```{r}
+# Hawaiian Asteraceae data
+total_species <- 101
+extinctions <- 10
+years <- 2025 - 1778  # 247 years since European arrival
+
+# Background rates
+background_rate_max_age_m1 <- 0.82    # Max Age M1
+background_rate_precise_m1 <- 0.56    # Precise M1
+
+data.frame(
+  Parameter = c("Total species", "Extinctions", "Years elapsed", "Max Age M1 background", "Precise M1 background"),
+  Value = c(total_species, extinctions, years, background_rate_max_age_m1, background_rate_precise_m1)
+) %>% 
+  kable(caption = "Hawaiian Asteraceae Analysis Parameters", digits = 2) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
+  column_spec(1, bold = TRUE)
+```
+
+### Calculate Current Extinction Rate (Linear)
+
+```{r}
+# Calculate current extinction rate
+extinction_rate <- extinctions / (total_species * years)
+extinctions_per_million_species_years <- extinction_rate * 1000000
+
+# Current extinction rate:
+round(extinctions_per_million_species_years,1)
+```
+
+Breakdown
+
+```         
+E/MSY = (10 extinctions / (101 species × 247 years)) × 1,000,000
+= (10 / 24,947) × 1,000,000
+= 0.0004008 × 1,000,000
+= 400.8 E/MSY
+```
+
+### Calculate Current Extinction Rate (exponential)
+
+Although E/MSY is typically calculated using a discrete formulation (observed extinctions / species-years), extinction in continuous time follows an exponential decay process. For comparison, we additionally calculate the *instantaneous* modern extinction rate, which treats the loss of 10 species over 247 years as a single exponential decline.
+
+This instantaneous rate represents the per-species hazard (μ) that would produce the observed proportion of species remaining, assuming continuous exponential decay:
+
+```         
+μ = -ln(S_after / S_before) / time
+```
+
+The resulting μ can then be expressed in E/MSY units by multiplying by 1,000,000.
+
+```{r}
+## Instantaneous (exponential) modern extinction rate
+## Using exponential decay: mu = -ln(S_after / S_before) / t
+
+S_before <- total_species
+S_after  <- total_species - extinctions
+
+# instantaneous annual extinction hazard (per species per year)
+mu_instantaneous <- -log(S_after / S_before) / years
+
+# convert instantaneous hazard to E/MSY (mu × 1,000,000)
+instantaneous_emsy <- mu_instantaneous * 1000000
+
+# Show instantaneous E/MSY
+round(instantaneous_emsy, 1)
+
+```
+
+Using exponential decay:
+
+$$
+\mu = -\ln\left(\frac{S_{\text{after}}}{S_{\text{before}}}\right) / t
+$$
+
+Where:\
+- $S_{\text{before}} = 101$\
+- $S_{\text{after}} = 91$\
+- $t = 247 \text{ years}$
+
+Breakdown:
+
+```         
+Instantaneous μ = -ln(91 / 101) / 247
+                = -ln(0.90099) / 247
+                = 0.10436 / 247
+                = 0.0004226 per species-year
+
+Instantaneous E/MSY = 0.0004226 × 1,000,000
+                    = 422.6 E/MSY
+```
+
+This value is slightly higher than the discrete estimate (\~400.8 E/MSY), as expected under exponential decay.
+
+### Compare Current Extinction Rate to Background Rates
+
+Calculate rate increases:
+
+Linear
+
+```{r}
+rate_increase_max_age <- extinctions_per_million_species_years / background_rate_max_age_m1
+rate_increase_precise <- extinctions_per_million_species_years / background_rate_precise_m1
+```
+
+Exponential
+
+```{r}
+# Ratio: instantaneous E/MSY divided by background E/MSY (same as other ratio calculation)
+rate_increase_instant_max_age <- instantaneous_emsy / background_rate_max_age_m1
+rate_increase_instant_precise  <- instantaneous_emsy / background_rate_precise_m1
+```
+
+Comparison table
+
+```{r}
+comparison_table <- data.frame(
+  Background_Model = c("Max Age M1", "Precise M1"),
+  Background_Rate = c(background_rate_max_age_m1, background_rate_precise_m1),
+  Current_Rate = rep(round(extinctions_per_million_species_years, 1), 2),
+  Instantaneous_Current_Rate = rep(round(instantaneous_emsy, 1), 2),
+  Rate_Increase = c(round(rate_increase_max_age, 0), round(rate_increase_precise, 0)),
+  Instantaneous_Rate_Increase = c(round(rate_increase_instant_max_age, 0), round(rate_increase_instant_precise, 0))
+)
+
+kable(comparison_table, caption = "Rate Comparison: Current vs Background") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE, position = "center") %>%
+  column_spec(1, bold = TRUE) %>%
+  column_spec(5:6, bold = TRUE, color = "red")
+```
+
+## Comparing Modern to Natural (DAISIE) Extinctions
+
+**Methodological Considerations**
+
+Both metrics represent extinction risk per species per unit time, but are scaled differently:
+
+-   DAISIE: Continuous-time rate (instantaneous risk)
+
+-   Modern E/MSY: Discrete-time average (observed extinctions over a fixed period)
+
+The difference is probably negligible for comparison purposes. To properly compare, we need to translate the DAISIE extinction rate into expected number of extinctions over our 247-year study period.
+
+### Expected Extinctions Calculation
+
+```{r}
+# Expected extinctions = N × μ × t 
+# N = Number of species at risk (101)
+# μ = Annual extinction rate (converted from DAISIE background rates)
+# t = Time period in years (247 years since European arrival)
+
+# Convert E/MSY to annual rates (DAISIE translation)
+annual_rate_max_age <- background_rate_max_age_m1 / 1000000
+annual_rate_precise <- background_rate_precise_m1 / 1000000
+
+# Calculate expected extinctions under background rates
+expected_max_age <- total_species * annual_rate_max_age * years
+expected_precise <- total_species * annual_rate_precise * years
+
+```
+
+```{r}
+# Show the translation calculations
+translation_calc <- data.frame(
+  Model = c("Max Age M1", "Precise M1"),
+  DAISIE_Rate = c(background_rate_max_age_m1, background_rate_precise_m1),
+  Annual_Rate = c(annual_rate_max_age, annual_rate_precise),
+  Calculation = c(
+    paste0(total_species, " × ", format(annual_rate_max_age, scientific = TRUE), " × ", years),
+    paste0(total_species, " × ", format(annual_rate_precise, scientific = TRUE), " × ", years)
+  ),
+  Expected_Extinctions = c(round(expected_max_age, 5), round(expected_precise, 5))
+)
+
+kable(translation_calc, caption = "DAISIE Rate Translation: From E/MSY to Expected Extinctions") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE, position = "center") %>%
+  column_spec(1, bold = TRUE)
+```
+
+Compare expected (DAISIE background) to observed number of extinctions since 1778
+
+```{r}
+expected_extinctions <- data.frame(
+  Model = c("Max Age M1", "Precise M1"),
+  Expected_Extinctions = c(round(expected_max_age, 5), round(expected_precise, 5)),
+  Observed_Extinctions = rep(extinctions, 2),
+  Ratio_Observed_Expected = c(round(extinctions / expected_max_age, 0), round(extinctions / expected_precise, 0))
+)
+
+kable(expected_extinctions, caption = "Expected vs Observed Extinctions") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE, position = "center") %>%
+  column_spec(1, bold = TRUE) %>%
+  column_spec(4, bold = TRUE, color = "red")
+```
+
+Both approaches (comparing rates and number of extinctions) yield the same ratio / comparison.
+
+### Comparison Table
+
+```{r}
+summary_comparison <- data.frame(
+  Model = c("Max Age M1", "Precise M1"),
+  Background_Rate_EMSY = c(background_rate_max_age_m1, background_rate_precise_m1),
+  Current_Rate_EMSY = rep(round(extinctions_per_million_species_years, 1), 2),
+  Instantaneous_Current_Rate = rep(round(instantaneous_emsy, 1), 2),
+  Expected_Extinctions = c(paste0(round(expected_max_age, 5)), 
+                          paste0(round(expected_precise, 5))),
+  Observed_Extinctions = rep(extinctions, 2),
+  Rate_Ratio_Direct = c(round(extinctions_per_million_species_years / background_rate_max_age_m1, 0),
+                         round(extinctions_per_million_species_years / background_rate_precise_m1, 0)),
+  Instantaneous_Rate_Increase = c(round(rate_increase_instant_max_age, 0), round(rate_increase_instant_precise, 0)),
+  Extinction_Ratio_Counts = c(round(extinctions / expected_max_age, 0),
+                               round(extinctions / expected_precise, 0)))
+
+kable(summary_comparison,
+      caption = "Complete Comparison: Rate vs Count Approaches",
+      col.names = c("Model", "Background E/MSY", "Current E/MSY (Discrete)", "Current E/MSY (Instantaneous)", "Expected Extinctions*",
+                    "Observed Extinctions", "Rate Ratio (Discrete)", "Rate Ratio (Instantaneous)", "Count Ratio")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE, position = "center") %>%
+  column_spec(1, bold = TRUE) %>%
+  column_spec(7:9, bold = TRUE, color = "red") %>%
+  add_header_above(c(" " = 1, "Background Data" = 3, "Extinction Counts" = 2, "Magnitude of Increase" = 3)) %>%
+  footnote(general = "*Expected extinctions calculated as: (Background E/MSY ÷ 1,000,000) × 101 species × 247 years")
+```
+
+Save excel
+
+```{r}
+# clean up column names
+excel_data <- summary_comparison
+names(excel_data) <- c("Model", "Background E/MSY", "Current E/MSY (Discrete)", "Current E/MSY (Instantaneous)", "Expected Extinctions*",
+                    "Observed Extinctions", "Rate Ratio (Discrete)", "Rate Ratio (Instantaneous)", "Count Ratio")
+# Save to Excel
+write_xlsx(excel_data, "../outputs/DAISIE_extinction_comparison_linear-and-exp.xlsx")
+
+```
