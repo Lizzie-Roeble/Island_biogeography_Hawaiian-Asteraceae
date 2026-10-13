@@ -2,7 +2,7 @@
 title: 'DAISIE'
 subtitle: 'Comparing modern extinction rate to background'
 output: html_document
-date: "2025-06-02"
+date: "2026-10-11"
 ---
 
 ```{r, echo = TRUE, message = FALSE, warning = FALSE}
@@ -47,16 +47,16 @@ Input data
 ```{r}
 # Hawaiian Asteraceae data
 total_species <- 101
-extinctions <- 10
-years <- 2025 - 1778  # 247 years since European arrival
+extinctions <- 12
+years <- 2026 - 1778  # 248 years since European arrival
 
 # Background rates
-background_rate_max_age_m1 <- 0.82    # Max Age M1
-background_rate_precise_m1 <- 0.56    # Precise M1
+background_rate_max_age_6.15myr <- 0.97    # Max Age - 6.15myr
+background_rate_precise_6.15myr <- 0.80    # Precise - 6.15myr
 
 data.frame(
-  Parameter = c("Total species", "Extinctions", "Years elapsed", "Max Age M1 background", "Precise M1 background"),
-  Value = c(total_species, extinctions, years, background_rate_max_age_m1, background_rate_precise_m1)
+  Parameter = c("Total species", "Extinctions", "Years elapsed", "Max Age - 6.15myr background", "Precise - 6.15myr background"),
+  Value = c(total_species, extinctions, years, background_rate_max_age_6.15myr, background_rate_precise_6.15myr)
 ) %>% 
   kable(caption = "Hawaiian Asteraceae Analysis Parameters", digits = 2) %>%
   kable_styling(bootstrap_options = c("striped", "hover", "condensed")) %>%
@@ -77,10 +77,10 @@ round(extinctions_per_million_species_years,1)
 Breakdown
 
 ```         
-E/MSY = (10 extinctions / (101 species × 247 years)) × 1,000,000
-= (10 / 24,947) × 1,000,000
-= 0.0004008 × 1,000,000
-= 400.8 E/MSY
+E/MSY = (12 extinctions / (101 species × 248 years)) × 1,000,000
+= (12 / 25,048) × 1,000,000
+= 0.0004790802 × 1,000,000
+= 479.1 E/MSY
 ```
 
 ### Calculate Current Extinction Rate (exponential)
@@ -121,22 +121,22 @@ $$
 
 Where:\
 - $S_{\text{before}} = 101$\
-- $S_{\text{after}} = 91$\
-- $t = 247 \text{ years}$
+- $S_{\text{after}} = 89$\
+- $t = 248 \text{ years}$
 
 Breakdown:
 
 ```         
-Instantaneous μ = -ln(91 / 101) / 247
-                = -ln(0.90099) / 247
-                = 0.10436 / 247
-                = 0.0004226 per species-year
+Instantaneous μ = -ln(89 / 101) / 248
+                = -ln(0.881188) / 248
+                = 0.12647 / 248
+                = 0.00050996 per species-year
 
-Instantaneous E/MSY = 0.0004226 × 1,000,000
-                    = 422.6 E/MSY
+Instantaneous E/MSY = 0.00050996 × 1,000,000
+                    = 509.96 E/MSY
 ```
 
-This value is slightly higher than the discrete estimate (\~400.8 E/MSY), as expected under exponential decay.
+This value is slightly higher than the discrete estimate (\~479.1 E/MSY), as expected under exponential decay.
 
 ### Compare Current Extinction Rate to Background Rates
 
@@ -145,24 +145,24 @@ Calculate rate increases:
 Linear
 
 ```{r}
-rate_increase_max_age <- extinctions_per_million_species_years / background_rate_max_age_m1
-rate_increase_precise <- extinctions_per_million_species_years / background_rate_precise_m1
+rate_increase_max_age <- extinctions_per_million_species_years / background_rate_max_age_6.15myr
+rate_increase_precise <- extinctions_per_million_species_years / background_rate_precise_6.15myr
 ```
 
 Exponential
 
 ```{r}
 # Ratio: instantaneous E/MSY divided by background E/MSY (same as other ratio calculation)
-rate_increase_instant_max_age <- instantaneous_emsy / background_rate_max_age_m1
-rate_increase_instant_precise  <- instantaneous_emsy / background_rate_precise_m1
+rate_increase_instant_max_age <- instantaneous_emsy / background_rate_max_age_6.15myr
+rate_increase_instant_precise  <- instantaneous_emsy / background_rate_precise_6.15myr
 ```
 
 Comparison table
 
 ```{r}
 comparison_table <- data.frame(
-  Background_Model = c("Max Age M1", "Precise M1"),
-  Background_Rate = c(background_rate_max_age_m1, background_rate_precise_m1),
+  Background_Model = c("Max Age - 6.15myr", "Precise - 6.15myr"),
+  Background_Rate = c(background_rate_max_age_6.15myr, background_rate_precise_6.15myr),
   Current_Rate = rep(round(extinctions_per_million_species_years, 1), 2),
   Instantaneous_Current_Rate = rep(round(instantaneous_emsy, 1), 2),
   Rate_Increase = c(round(rate_increase_max_age, 0), round(rate_increase_precise, 0)),
@@ -194,11 +194,11 @@ The difference is probably negligible for comparison purposes. To properly compa
 # Expected extinctions = N × μ × t 
 # N = Number of species at risk (101)
 # μ = Annual extinction rate (converted from DAISIE background rates)
-# t = Time period in years (247 years since European arrival)
+# t = Time period in years (248 years since European arrival)
 
 # Convert E/MSY to annual rates (DAISIE translation)
-annual_rate_max_age <- background_rate_max_age_m1 / 1000000
-annual_rate_precise <- background_rate_precise_m1 / 1000000
+annual_rate_max_age <- background_rate_max_age_6.15myr / 1000000
+annual_rate_precise <- background_rate_precise_6.15myr / 1000000
 
 # Calculate expected extinctions under background rates
 expected_max_age <- total_species * annual_rate_max_age * years
@@ -209,8 +209,8 @@ expected_precise <- total_species * annual_rate_precise * years
 ```{r}
 # Show the translation calculations
 translation_calc <- data.frame(
-  Model = c("Max Age M1", "Precise M1"),
-  DAISIE_Rate = c(background_rate_max_age_m1, background_rate_precise_m1),
+  Model = c("Max Age - 6.15myr", "Precise - 6.15myr"),
+  DAISIE_Rate = c(background_rate_max_age_6.15myr, background_rate_precise_6.15myr),
   Annual_Rate = c(annual_rate_max_age, annual_rate_precise),
   Calculation = c(
     paste0(total_species, " × ", format(annual_rate_max_age, scientific = TRUE), " × ", years),
@@ -229,7 +229,7 @@ Compare expected (DAISIE background) to observed number of extinctions since 177
 
 ```{r}
 expected_extinctions <- data.frame(
-  Model = c("Max Age M1", "Precise M1"),
+  Model = c("Max Age - 6.15myr", "Precise - 6.15myr"),
   Expected_Extinctions = c(round(expected_max_age, 5), round(expected_precise, 5)),
   Observed_Extinctions = rep(extinctions, 2),
   Ratio_Observed_Expected = c(round(extinctions / expected_max_age, 0), round(extinctions / expected_precise, 0))
@@ -248,15 +248,15 @@ Both approaches (comparing rates and number of extinctions) yield the same ratio
 
 ```{r}
 summary_comparison <- data.frame(
-  Model = c("Max Age M1", "Precise M1"),
-  Background_Rate_EMSY = c(background_rate_max_age_m1, background_rate_precise_m1),
+  Model = c("Max Age - 6.15myr", "Precise - 6.15myr"),
+  Background_Rate_EMSY = c(background_rate_max_age_6.15myr, background_rate_precise_6.15myr),
   Current_Rate_EMSY = rep(round(extinctions_per_million_species_years, 1), 2),
   Instantaneous_Current_Rate = rep(round(instantaneous_emsy, 1), 2),
   Expected_Extinctions = c(paste0(round(expected_max_age, 5)), 
                           paste0(round(expected_precise, 5))),
   Observed_Extinctions = rep(extinctions, 2),
-  Rate_Ratio_Direct = c(round(extinctions_per_million_species_years / background_rate_max_age_m1, 0),
-                         round(extinctions_per_million_species_years / background_rate_precise_m1, 0)),
+  Rate_Ratio_Direct = c(round(extinctions_per_million_species_years / background_rate_max_age_6.15myr, 0),
+                         round(extinctions_per_million_species_years / background_rate_precise_6.15myr, 0)),
   Instantaneous_Rate_Increase = c(round(rate_increase_instant_max_age, 0), round(rate_increase_instant_precise, 0)),
   Extinction_Ratio_Counts = c(round(extinctions / expected_max_age, 0),
                                round(extinctions / expected_precise, 0)))
@@ -281,6 +281,6 @@ excel_data <- summary_comparison
 names(excel_data) <- c("Model", "Background E/MSY", "Current E/MSY (Discrete)", "Current E/MSY (Instantaneous)", "Expected Extinctions*",
                     "Observed Extinctions", "Rate Ratio (Discrete)", "Rate Ratio (Instantaneous)", "Count Ratio")
 # Save to Excel
-write_xlsx(excel_data, "../outputs/DAISIE_extinction_comparison_linear-and-exp.xlsx")
+write_xlsx(excel_data, "../outputs/DAISIE5_extinction_comparison_linear-and-exp.xlsx")
 
 ```
