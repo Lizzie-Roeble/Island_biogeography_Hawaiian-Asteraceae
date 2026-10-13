@@ -1,17 +1,35 @@
-################################################
-# DAISIE: Goodness-of-fit     
 ###############################################
+# DAISIE: Goodness-of-fit 
+# DAISIE5 
+###############################################
+
+# Goal: Compare simulated diversity (1000 filtered sims per model) to observed Hawaii data
+# Datasets: maxage and precise, 5.14myr and 6.15myr
 
 # Load required libraries
 library(DAISIE)
 library(ggplot2)
 library(patchwork)
+library(reshape2)
+
+# Plot font (Gill Sans; on Windows use "Gill Sans MT")
+plot_font <- "Gill Sans"
+
+# PDF device using macOS Quartz (supports system fonts; no XQuartz/cairo needed)
+pdf_device <- function(filename, width, height, ...) {
+  grDevices::quartz(file = filename, type = "pdf", width = width, height = height)
+}
 
 # Load simulations: 1000 simulations filtered on condition of >= 1 nonendemic
-load("../outputs/DAISIE_sims_precise_m1_filt_1000.Rdata")
-load("../outputs/DAISIE_sims_maxage_m1_filt_1000.Rdata")
-island_replicates_maxage_m1 <- DAISIE_maxage_m1_sims_filt_1000
-island_replicates_precise_m1 <- DAISIE_precise_m1_sims_filt_1000
+load("../data/DAISIE5_sims/DAISIE_maxage_5.14myr_sims_filt_1000.Rdata")
+load("../data/DAISIE5_sims/DAISIE_precise_5.14myr_sims_filt_1000.Rdata")
+load("../data/DAISIE5_sims/DAISIE_maxage_6.15myr_sims_filt_1000.Rdata")
+load("../data/DAISIE5_sims/DAISIE_precise_6.15myr_sims_filt_1000.Rdata")
+
+island_replicates_maxage_5.14myr <- DAISIE_maxage_5.14myr_m1_sims_filt_1000
+island_replicates_precise_5.14myr <- DAISIE_precise_5.14myr_m1_sims_filt_1000
+island_replicates_maxage_6.15myr <- DAISIE_maxage_6.15myr_m1_sims_filt_1000
+island_replicates_precise_6.15myr <- DAISIE_precise_6.15myr_m1_sims_filt_1000
 
 # Observed diversity values
 number_species_data <- 101
@@ -126,235 +144,236 @@ process_simulation <- function(island_replicates) {
   ))
 }
 
-# Process both parameter sets
-results_maxage_m1 <- process_simulation(island_replicates_maxage_m1)
-results_precise_m1 <- process_simulation(island_replicates_precise_m1)
+# Process all four datasets
+results_maxage_5.14myr <- process_simulation(island_replicates_maxage_5.14myr)
+results_precise_5.14myr <- process_simulation(island_replicates_precise_5.14myr)
+results_maxage_6.15myr <- process_simulation(island_replicates_maxage_6.15myr)
+results_precise_6.15myr <- process_simulation(island_replicates_precise_6.15myr)
+
+# List of results, names used for labelling below (keeps datasets from getting mixed up)
+results_list <- list(
+  maxage_5.14myr = results_maxage_5.14myr,
+  precise_5.14myr = results_precise_5.14myr,
+  maxage_6.15myr = results_maxage_6.15myr,
+  precise_6.15myr = results_precise_6.15myr
+)
+
+# Sanity checks
+
+## one row per dataset: 1000 sims, every sim has >= 1 non-endemic, and medians differ between datasets
+data.frame(
+  Dataset = names(results_list),
+  N_sims = sapply(results_list, function(x) length(x$number_spec)), # should be 1000
+  Min_nonendemic = sapply(results_list, function(x) min(x$number_stac4)), # should be >= 1
+  Median_species = sapply(results_list, function(x) median(x$number_spec)),
+  Median_colonists = sapply(results_list, function(x) median(x$number_colonists))
+)
+
+## maxage and precise objects should not be identical (should be FALSE)
+identical(island_replicates_maxage_5.14myr, island_replicates_precise_5.14myr)
+identical(island_replicates_maxage_6.15myr, island_replicates_precise_6.15myr)
+identical(island_replicates_maxage_5.14myr, island_replicates_maxage_6.15myr)
+identical(island_replicates_precise_5.14myr, island_replicates_precise_6.15myr)
 
 # Histogram of simulated vs observed
 
-# Create individual plots for maxage_m1
-# Number of species (maxage_m1)
-maxage_m1_species <- ggplot(data.frame(value = results_maxage_m1$number_spec), aes(x = value)) +
-  geom_histogram(fill = "grey", color = NA, alpha = 0.7, bins = 20) +
-  geom_vline(xintercept = median(results_maxage_m1$number_spec, na.rm = TRUE), color = "black", linewidth = 1) +
-  geom_vline(xintercept = number_species_data, 
-             color = "red", linewidth = 1) +
-  labs(x = "Number of species", y = "Frequency") +
-  theme_classic() +
-  theme(plot.margin = margin(5, 5, 5, 5))
-maxage_m1_species
+# Function to create the six goodness-of-fit plots for one dataset and combine them
+# Small whole-number counts use bins of width 1 centred on integers
+# binwidth_species and binwidth_clade default to a whole-number width giving ~20 and ~15 bars (set a number to override)
+make_goodness_of_fit_plot <- function(results, binwidth_species = NULL, binwidth_clade = NULL) {
+  
+  if (is.null(binwidth_species)) {
+    binwidth_species <- max(1, ceiling(diff(range(results$number_spec, na.rm = TRUE)) / 20))
+  }
+  if (is.null(binwidth_clade)) {
+    binwidth_clade <- max(1, ceiling(diff(range(results$size_largest_clade, na.rm = TRUE)) / 15))
+  }
+  
+  # Number of species
+  species_plot <- ggplot(data.frame(value = results$number_spec), aes(x = value)) +
+    geom_histogram(fill = "grey", color = NA, alpha = 0.7, binwidth = binwidth_species, boundary = 0) +
+    geom_vline(xintercept = median(results$number_spec, na.rm = TRUE), color = "black", linewidth = 1) +
+    geom_vline(xintercept = number_species_data, 
+               color = "red", linewidth = 1) +
+    labs(x = "Number of species", y = "Frequency") +
+    theme_classic(base_family = plot_font) +
+    theme(plot.margin = margin(5, 5, 5, 5))
+  
+  # Colonization events
+  colonists_plot <- ggplot(data.frame(value = results$number_colonists), aes(x = value)) +
+    geom_histogram(fill = "grey", color = NA, alpha = 0.7, binwidth = 1, center = 0) +
+    geom_vline(xintercept = median(results$number_colonists, na.rm = TRUE), color = "black", linewidth = 1) +
+    geom_vline(xintercept = colonisations_data, 
+               color = "red", linewidth = 1) +
+    labs(x = "Number of colonization events", y = "Frequency") +
+    theme_classic(base_family = plot_font) +
+    theme(plot.margin = margin(5, 5, 5, 5))
+  
+  # Size of largest clade
+  largest_clade_plot <- ggplot(data.frame(value = results$size_largest_clade), aes(x = value)) +
+    geom_histogram(fill = "grey", color = NA, alpha = 0.7, binwidth = binwidth_clade, boundary = 0) +
+    geom_vline(xintercept = median(results$size_largest_clade, na.rm = TRUE), 
+               color = "black", linewidth = 1) +
+    geom_vline(xintercept = size_largest_clade_data, 
+               color = "red", linewidth = 1) +
+    labs(x = "Size of largest clade", y = "Frequency") +
+    theme_classic(base_family = plot_font) +
+    theme(plot.margin = margin(5, 5, 5, 5))
+  
+  # Endemic clades
+  endemic_clades_plot <- ggplot(data.frame(value = results$number_stac2), aes(x = value)) +
+    geom_histogram(fill = "grey", color = NA, alpha = 0.7, binwidth = 1, center = 0) +
+    geom_vline(xintercept = median(results$number_stac2, na.rm = TRUE), color = "black", linewidth = 1) +
+    geom_vline(xintercept = endemic_clades_data, 
+               color = "red", linewidth = 1) +
+    labs(x = "Number of endemic clades", y = "Frequency") +
+    theme_classic(base_family = plot_font) +
+    theme(plot.margin = margin(5, 5, 5, 5))
+  
+  # Endemic singletons
+  endemic_singletons_plot <- ggplot(data.frame(value = results$number_stac2_singletons), aes(x = value)) +
+    geom_histogram(fill = "grey", color = NA, alpha = 0.7, binwidth = 1, center = 0) +
+    geom_vline(xintercept = median(results$number_stac2_singletons, na.rm = TRUE), color = "black", linewidth = 1) +
+    geom_vline(xintercept = endemic_singletons_data, 
+               color = "red", linewidth = 1) +
+    labs(x = "Endemic singletons", y = "Frequency") +
+    scale_x_continuous(breaks = seq(0, 10, by = 2)) +
+    theme_classic(base_family = plot_font) +
+    theme(plot.margin = margin(5, 5, 5, 5))
+  
+  # Non-endemic species
+  non_endemic_plot <- ggplot(data.frame(value = results$number_stac4), aes(x = value)) +
+    geom_histogram(fill = "grey", color = NA, alpha = 0.7, binwidth = 1, center = 0) +
+    geom_vline(xintercept = median(results$number_stac4, na.rm = TRUE), color = "black", linewidth = 1) +
+    geom_vline(xintercept = non_endemic_species_data, 
+               color = "red", linewidth = 1) +
+    labs(x = "Number of non-endemic species", y = "Frequency") +
+    theme_classic(base_family = plot_font) +
+    theme(plot.margin = margin(5, 5, 5, 5))
+  
+  # Combine
+  species_plot + colonists_plot + largest_clade_plot + endemic_clades_plot + endemic_singletons_plot + non_endemic_plot
+}
 
-# Colonization events (maxage_m1)
-maxage_m1_colonists <- ggplot(data.frame(value = results_maxage_m1$number_colonists), aes(x = value)) +
-  geom_histogram(fill = "grey", color = NA, alpha = 0.7, bins = 10) +
-  geom_vline(xintercept = median(results_maxage_m1$number_colonists, na.rm = TRUE), color = "black", linewidth = 1) +
-  geom_vline(xintercept = colonisations_data, 
-             color = "red", linewidth = 1) +
-  labs(x = "Number of colonization events", y = "Frequency") +
-  theme_classic() +
-  theme(plot.margin = margin(5, 5, 5, 5))
-maxage_m1_colonists 
+# Create combined plots for each dataset
+goodness_fit_maxage_5.14myr <- make_goodness_of_fit_plot(results_maxage_5.14myr)
+goodness_fit_maxage_5.14myr
 
-# Size of largest clade (maxage_m1)
-maxage_m1_largest_clade <- ggplot(data.frame(value = results_maxage_m1$size_largest_clade), aes(x = value)) +
-  geom_histogram(fill = "grey", color = NA, alpha = 0.7, bins = 15) +
-  geom_vline(xintercept = median(results_maxage_m1$size_largest_clade, na.rm = TRUE), 
-             color = "black", linewidth = 1) +
-  geom_vline(xintercept = size_largest_clade_data, 
-             color = "red", linewidth = 1) +
-  labs(x = "Size of largest clade", y = "Frequency") +
-  theme_classic() +
-  theme(plot.margin = margin(5, 5, 5, 5))
-maxage_m1_largest_clade
+goodness_fit_precise_5.14myr <- make_goodness_of_fit_plot(results_precise_5.14myr)
+goodness_fit_precise_5.14myr
 
-# Endemic clades (maxage_m1)
-maxage_m1_endemic_clades <- ggplot(data.frame(value = results_maxage_m1$number_stac2), aes(x = value)) +
-  geom_histogram(fill = "grey", color = NA, alpha = 0.7, bins = 12) +
-  geom_vline(xintercept = median(results_maxage_m1$number_stac2, na.rm = TRUE), color = "black", linewidth = 1) +
-  geom_vline(xintercept = endemic_clades_data, 
-             color = "red", linewidth = 1) +
-  labs(x = "Number of endemic clades", y = "Frequency") +
-  theme_classic() +
-  theme(plot.margin = margin(5, 5, 5, 5))
-maxage_m1_endemic_clades
+goodness_fit_maxage_6.15myr <- make_goodness_of_fit_plot(results_maxage_6.15myr)
+goodness_fit_maxage_6.15myr
 
-# Endemic singletons (maxage_m1)
-maxage_m1_endemic_singletons <- ggplot(data.frame(value = results_maxage_m1$number_stac2_singletons), aes(x = value)) +
-  geom_histogram(fill = "grey", color = NA, alpha = 0.7, bins = 10) +
-  geom_vline(xintercept = median(results_maxage_m1$number_stac2_singletons, na.rm = TRUE), color = "black", linewidth = 1) +
-  geom_vline(xintercept = endemic_singletons_data, 
-             color = "red", linewidth = 1) +
-  labs(x = "Endemic singletons", y = "Frequency") +
-  scale_x_continuous(breaks = seq(0, 10, by = 2)) +
-  theme_classic() +
-  theme(plot.margin = margin(5, 5, 5, 5))
-maxage_m1_endemic_singletons
-
-# Non-endemic species (maxage_m1)
-maxage_m1_non_endemic <- ggplot(data.frame(value = results_maxage_m1$number_stac4), aes(x = value)) +
-  geom_histogram(fill = "grey", color = NA, alpha = 0.7, bins = 3) +
-  geom_vline(xintercept = median(results_maxage_m1$number_stac4, na.rm = TRUE), color = "black", linewidth = 1) +
-  geom_vline(xintercept = non_endemic_species_data, 
-             color = "red", linewidth = 1) +
-  labs(x = "Number of non-endemic species", y = "Frequency") +
-  theme_classic() +
-  theme(plot.margin = margin(5, 5, 5, 5))
-maxage_m1_non_endemic
-
-# Create individual plots for precise_m1
-# Number of species (precise_m1)
-precise_m1_species <- ggplot(data.frame(value = results_precise_m1$number_spec), aes(x = value)) +
-  geom_histogram(fill = "grey", color = NA, alpha = 0.7, bins = 20) +
-  geom_vline(xintercept = median(results_precise_m1$number_spec, na.rm = TRUE), color = "black", linewidth = 1) +
-  geom_vline(xintercept = number_species_data, 
-             color = "red", linewidth = 1) +
-  labs(x = "Number of species", y = "Frequency") +
-  theme_classic() +
-  theme(plot.margin = margin(5, 5, 5, 5))
-precise_m1_species
-
-# Colonization events (precise_m1)
-precise_m1_colonists <- ggplot(data.frame(value = results_precise_m1$number_colonists), aes(x = value)) +
-  geom_histogram(fill = "grey", color = NA, alpha = 0.7, bins = 10) +
-  geom_vline(xintercept = median(results_precise_m1$number_colonists, na.rm = TRUE), color = "black", linewidth = 1) +
-  geom_vline(xintercept = colonisations_data, 
-             color = "red", linewidth = 1) +
-  labs(x = "Number of colonization events", y = "Frequency") +
-  theme_classic() +
-  theme(plot.margin = margin(5, 5, 5, 5))
-precise_m1_colonists 
-
-# Size of largest clade (precise_m1)
-precise_m1_largest_clade <- ggplot(data.frame(value = results_precise_m1$size_largest_clade), aes(x = value)) +
-  geom_histogram(fill = "grey", color = NA, alpha = 0.7, bins = 15) +
-  geom_vline(xintercept = median(results_precise_m1$size_largest_clade, na.rm = TRUE), 
-             color = "black", linewidth = 1) +
-  geom_vline(xintercept = size_largest_clade_data, 
-             color = "red", linewidth = 1) +
-  labs(x = "Size of largest clade", y = "Frequency") +
-  theme_classic() +
-  theme(plot.margin = margin(5, 5, 5, 5))
-precise_m1_largest_clade
-
-# Endemic clades (precise_m1)
-precise_m1_endemic_clades <- ggplot(data.frame(value = results_precise_m1$number_stac2), aes(x = value)) +
-  geom_histogram(fill = "grey", color = NA, alpha = 0.7, bins = 12) +
-  geom_vline(xintercept = median(results_precise_m1$number_stac2, na.rm = TRUE), color = "black", linewidth = 1) +
-  geom_vline(xintercept = endemic_clades_data, 
-             color = "red", linewidth = 1) +
-  labs(x = "Number of endemic clades", y = "Frequency") +
-  theme_classic() +
-  theme(plot.margin = margin(5, 5, 5, 5))
-precise_m1_endemic_clades
-
-# Endemic singletons (precise_m1)
-precise_m1_endemic_singletons <- ggplot(data.frame(value = results_precise_m1$number_stac2_singletons), aes(x = value)) +
-  geom_histogram(fill = "grey", color = NA, alpha = 0.7, bins = 9) +
-  geom_vline(xintercept = median(results_precise_m1$number_stac2_singletons, na.rm = TRUE), color = "black", linewidth = 1) +
-  geom_vline(xintercept = endemic_singletons_data, 
-             color = "red", linewidth = 1) +
-  labs(x = "Endemic singletons", y = "Frequency") +
-  scale_x_continuous(breaks = seq(0, 10, by = 2)) + 
-  theme_classic() +
-  theme(plot.margin = margin(5, 5, 5, 5))
-precise_m1_endemic_singletons
-
-# Non-endemic species (precise_m1)
-precise_m1_non_endemic <- ggplot(data.frame(value = results_precise_m1$number_stac4), aes(x = value)) +
-  geom_histogram(fill = "grey", color = NA, alpha = 0.7, bins = 5) +
-  geom_vline(xintercept = median(results_precise_m1$number_stac4, na.rm = TRUE), color = "black", linewidth = 1) +
-  geom_vline(xintercept = non_endemic_species_data, 
-             color = "red", linewidth = 1) +
-  labs(x = "Number of non-endemic species", y = "Frequency") +
-  theme_classic() +
-  theme(plot.margin = margin(5, 5, 5, 5))
-precise_m1_non_endemic
-
-# Combine
-goodness_fit_maxage_m1 <- maxage_m1_species + maxage_m1_colonists + maxage_m1_largest_clade + maxage_m1_endemic_clades + maxage_m1_endemic_singletons + maxage_m1_non_endemic
-goodness_fit_maxage_m1
-
-goodness_fit_precise_m1 <- precise_m1_species + precise_m1_colonists + precise_m1_largest_clade + precise_m1_endemic_clades + precise_m1_endemic_singletons + precise_m1_non_endemic
-goodness_fit_precise_m1
+goodness_fit_precise_6.15myr <- make_goodness_of_fit_plot(results_precise_6.15myr)
+goodness_fit_precise_6.15myr
 
 # Save the plots 
-ggsave("../outputs/DAISIE_goodness_of_fit_maxage_m1_raw.pdf", goodness_fit_maxage_m1, 
-       width = 11, height = 7, units = "in")
-ggsave("../outputs/DAISIE_goodness_of_fit_precise_m1_raw.pdf", goodness_fit_precise_m1, 
-       width = 11, height = 7, units = "in")
+ggsave("../outputs/DAISIE5_goodness_of_fit_maxage_5.14myr_raw.pdf", goodness_fit_maxage_5.14myr, 
+       width = 11, height = 7, units = "in", device = pdf_device)
+ggsave("../outputs/DAISIE5_goodness_of_fit_precise_5.14myr_raw.pdf", goodness_fit_precise_5.14myr, 
+       width = 11, height = 7, units = "in", device = pdf_device)
+ggsave("../outputs/DAISIE5_goodness_of_fit_maxage_6.15myr_raw.pdf", goodness_fit_maxage_6.15myr, 
+       width = 11, height = 7, units = "in", device = pdf_device)
+ggsave("../outputs/DAISIE5_goodness_of_fit_precise_6.15myr_raw.pdf", goodness_fit_precise_6.15myr, 
+       width = 11, height = 7, units = "in", device = pdf_device)
 
-########### not updated below ############
-# Additional exploration
+########### Additional exploration ###########
 
 # Create a summary dataframe for quick comparison
+model_names <- names(results_list)
 
 summary_stats <- data.frame(
   Parameter = c("Number of Species", "Colonizations", "Endemic Species", "Endemic Clades", 
                 "Endemic Singletons", "Non-endemic Species", "Size Largest Clade"),
   Observed = c(number_species_data, colonisations_data, endemic_species_data, 
-               endemic_clades_data, endemic_singletons_data, non_endemic_species_data, 
-               size_largest_clade_data),
-  Median_m1 = c(median(results_m1$number_spec), median(results_m1$number_colonists), 
-                median(results_m1$number_endemic_species), median(results_m1$number_stac2), 
-                median(results_m1$number_stac2_singletons), median(results_m1$number_stac4),
-                median(results_m1$size_largest_clade, na.rm = TRUE)),
-  Median_m4 = c(median(results_m4$number_spec), median(results_m4$number_colonists), 
-                median(results_m4$number_endemic_species), median(results_m4$number_stac2), 
-                median(results_m4$number_stac2_singletons), median(results_m4$number_stac4),
-                median(results_m4$size_largest_clade, na.rm = TRUE))
+               endemic_clades_data, endemic_singletons_data, non_endemic_species_data,
+               size_largest_clade_data)
 )
+
+# Add median of simulations for each dataset
+for (model in model_names) {
+  results <- results_list[[model]]
+  summary_stats[[paste0("Median_", model)]] <- c(
+    median(results$number_spec), median(results$number_colonists), 
+    median(results$number_endemic_species), median(results$number_stac2), 
+    median(results$number_stac2_singletons), median(results$number_stac4),
+    median(results$size_largest_clade, na.rm = TRUE)
+  )
+}
+
 # Add absolute differences from observed
-summary_stats$Diff_m1 <- abs(summary_stats$Median_m1 - summary_stats$Observed)
-summary_stats$Diff_m4 <- abs(summary_stats$Median_m4 - summary_stats$Observed)
-# Better model (lower difference is better)
-summary_stats$Better_Model <- ifelse(summary_stats$Diff_m1 < summary_stats$Diff_m4, "m1", 
-                                     ifelse(summary_stats$Diff_m1 > summary_stats$Diff_m4, "m4", "Tie"))
+for (model in model_names) {
+  summary_stats[[paste0("Diff_", model)]] <- abs(summary_stats[[paste0("Median_", model)]] - summary_stats$Observed)
+}
+
+# Closest model per parameter (lower difference is better)
+diff_cols <- paste0("Diff_", model_names)
+summary_stats$Closest_Model <- apply(summary_stats[, diff_cols], 1, function(x) {
+  best <- which(x == min(x))
+  if (length(best) > 1) "Tie" else sub("Diff_", "", names(x)[best])
+})
+
 # Print summary statistics
 print(summary_stats)
+
 # Write to csv
-write.csv(summary_stats, "Goodness-of-fit_model_comparison.csv", row.names = FALSE)
+write.csv(summary_stats, "../outputs/DAISIE5_goodness_of_fit_model_comparison.csv", row.names = FALSE)
 
 # Create comparison bar plot
-
-summary_long <- melt(summary_stats[, c("Parameter", "Observed", "Median_m1", "Median_m4")], 
+summary_long <- melt(summary_stats[, c("Parameter", "Observed", paste0("Median_", model_names))], 
                      id.vars = "Parameter")
+
 # Create bar plot
 comparison_plot <- ggplot(summary_long, aes(x = Parameter, y = value, fill = variable)) +
   geom_bar(stat = "identity", position = position_dodge(0.9), width = 0.8) +
-  scale_fill_manual(values = c("Observed" = "darkgrey", "Median_m1" = "#385582", "Median_m4" = "#754C29"),
-                    labels = c("Observed" = "Observed", "Median_m1" = "Model m1", "Median_m4" = "Model m4")) +
-  labs(title = "Comparison of Models m1 and m4 with Observed Data",
+  scale_fill_manual(values = c("Observed" = "darkgrey", 
+                               "Median_maxage_5.14myr" = "#385582", 
+                               "Median_maxage_6.15myr" = "#8FA9D1",
+                               "Median_precise_5.14myr" = "#754C29",
+                               "Median_precise_6.15myr" = "#C9A27E"),
+                    labels = c("Observed" = "Observed", 
+                               "Median_maxage_5.14myr" = "Maxage 5.14myr", 
+                               "Median_maxage_6.15myr" = "Maxage 6.15myr",
+                               "Median_precise_5.14myr" = "Precise 5.14myr",
+                               "Median_precise_6.15myr" = "Precise 6.15myr")) +
+  labs(title = "Comparison of DAISIE5 Models with Observed Data",
        x = "", y = "Value", fill = "") +
-  theme_minimal() +
+  theme_minimal(base_family = plot_font) +
   theme(
     axis.text.x = element_text(angle = 45, hjust = 1),
     plot.title = element_text(size = 14, face = "bold"),
     legend.position = "top"
   )
+
 comparison_plot
+
 # Save the comparison plot
-#ggsave("Hawaii_model_comparison.png", comparison_plot, width = 10, height = 6, dpi = 300)
+#ggsave("../outputs/DAISIE5_model_comparison.png", comparison_plot, width = 10, height = 6, dpi = 300)
 
 # Create a heatmap of differences
-
-diff_matrix <- as.matrix(summary_stats[, c("Diff_m1", "Diff_m4")])
+diff_matrix <- as.matrix(summary_stats[, diff_cols])
 rownames(diff_matrix) <- summary_stats$Parameter
+
 # Melt the difference matrix for ggplot
 diff_data <- melt(diff_matrix)
 colnames(diff_data) <- c("Parameter", "Model", "Difference")
 diff_data$Model <- gsub("Diff_", "", diff_data$Model)
+
 # Create heatmap
 heatmap_plot <- ggplot(diff_data, aes(x = Model, y = Parameter, fill = Difference)) +
   geom_tile() +
   scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = median(diff_data$Difference)) +
-  geom_text(aes(label = round(Difference, 1)), color = "black", size = 3) +
+  geom_text(aes(label = round(Difference, 1)), color = "black", size = 3, family = plot_font) +
   labs(title = "Absolute Differences from Observed Values",
        fill = "Difference") +
-  theme_minimal() +
+  theme_minimal(base_family = plot_font) +
   theme(
-    axis.text.x = element_text(angle = 0, hjust = 0.5),
+    axis.text.x = element_text(angle = 45, hjust = 1),
     plot.title = element_text(size = 14, face = "bold")
   )
-# Save the heatmap
-#ggsave("Hawaii_difference_heatmap.png", heatmap_plot, width = 8, height = 6, dpi = 300)
 
+heatmap_plot
+
+# Save the heatmap
+#ggsave("../outputs/DAISIE5_difference_heatmap.png", heatmap_plot, width = 8, height = 6, dpi = 300)
