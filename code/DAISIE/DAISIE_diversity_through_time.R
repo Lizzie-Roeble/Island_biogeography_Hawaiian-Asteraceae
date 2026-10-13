@@ -1,24 +1,41 @@
 ###############################
 # DAISIE 
-# Diversity Through Time (DTT)                           
+# Diversity Through Time (DTT)
+# DAISIE 5
 ###############################
 
 # Load required libraries
 library(DAISIE)
 
 # Load simulations: 1000 simulations filtered on condition of >= 1 nonendemic
-load("../outputs/DAISIE_sims_precise_m1_filt_1000.Rdata")
-load("../outputs/DAISIE_sims_maxage_m1_filt_1000.Rdata")
-island_replicates_maxage_m1 <- DAISIE_maxage_m1_sims_filt_1000
-island_replicates_precise_m1 <- DAISIE_precise_m1_sims_filt_1000
+# maxage - 5.14myr
+load("../data/DAISIE5_sims/DAISIE_maxage_5.14myr_sims_filt_1000.Rdata")
+island_replicates_maxage_5.14myr <- DAISIE_maxage_5.14myr_m1_sims_filt_1000
+# precise - 5.14myr
+load("../data/DAISIE5_sims/DAISIE_precise_5.14myr_sims_filt_1000.Rdata")
+island_replicates_precise_5.14myr <- DAISIE_precise_5.14myr_m1_sims_filt_1000
+# maxage - 6.15myr
+load("../data/DAISIE5_sims/DAISIE_maxage_6.15myr_sims_filt_1000.Rdata")
+island_replicates_maxage_6.15myr <- DAISIE_maxage_6.15myr_m1_sims_filt_1000
+# precise - 6.15myr
+load("../data/DAISIE5_sims/DAISIE_precise_6.15myr_sims_filt_1000.Rdata")
+island_replicates_precise_6.15myr <- DAISIE_precise_6.15myr_m1_sims_filt_1000
 
-# Plot DTT for maxage
-pdf(file = "../outputs/DAISIE_dtt_maxage_m1_raw.pdf", width = 8, height = 8.5)  
-DAISIE_plot_sims(DAISIE_maxage_m1_sims_filt_1000)
+
+# Plot DTT 
+# maxage - 5.14myr
+pdf(file = "../outputs/DAISIE_dtt_maxage_5.14myr_DAISIE5_raw.pdf", width = 8, height = 8.5)  
+DAISIE_plot_sims(island_replicates_maxage_5.14myr)
 dev.off()
-
-# Plot DTT for precise age
-pdf(file = "../outputs/DAISIE_dtt_precise_m1_raw.pdf", width = 8, height = 8.5)  
-DAISIE_plot_sims(DAISIE_precise_m1_sims_filt_1000)
+# precise - 5.14myr
+pdf(file = "../outputs/DAISIE_dtt_precise_5.14myr_DAISIE5_raw.pdf", width = 8, height = 8.5)  
+DAISIE_plot_sims(island_replicates_precise_5.14myr)
 dev.off()
-
+# maxage - 6.15myr
+pdf(file = "../outputs/DAISIE_dtt_maxage_6.15myr_DAISIE5_raw.pdf", width = 8, height = 8.5)  
+DAISIE_plot_sims(island_replicates_maxage_6.15myr)
+dev.off()
+# precise - 6.15myr
+pdf(file = "../outputs/DAISIE_dtt_precise_6.15myr_DAISIE5_raw.pdf", width = 8, height = 8.5)  
+DAISIE_plot_sims(island_replicates_precise_6.15myr)
+dev.off()
