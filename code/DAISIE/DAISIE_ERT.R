@@ -1,6 +1,7 @@
 ################################### 
 # DAISIE
 # Evolutionary Return Time (ERT) 
+# DAISIE 5
 ###################################
 
 # Install development branch of DAISIE 
@@ -99,10 +100,11 @@ calculate_species_quantiles <- function(marginal_prob_dist, species_index, max_s
 #-----------------------------------
 
 # Model parameters
-# Maxage: M1 - DD
-pars_maxage <- c(1.55906359, 0.818905529, 87.70998181, 0.000554282, 10.69543004)
-# Precise: M1 - DD
-pars_precise <- c(1.197907, 0.563887, 158.369260903136, 0.0004939022, 2.058786)
+# Maxage - 6.15myr
+pars_maxage <- c(1.92637708766939, 0.966436759805301, 74.1983894314959, 0.000509148912158619, 9.55293550834906)
+# Precise - 6.15myr
+pars_precise <- c(1.578244508, 0.79944063, 100.5920454, 0.000498832, 1.468723953)
+
 
 # Simulation constants
 mainland_pool_size <- 7000
@@ -117,7 +119,7 @@ max_species <- 300
 
 # Hawaii-specific diversity values
 total_species_count <- 103  # 101 described species + 2 independent P. sandwicenisum taxa
-extinct_species_count <- 10
+extinct_species_count <- 12
 non_endemic_species_count <- 1
 
 # Generalized diversity values
@@ -127,7 +129,7 @@ current_diversity_endemic <- total_species_count - extinct_species_count - non_e
 current_diversity_non_endemic <- non_endemic_species_count
 
 # Future IUCN diversity projections
-iucn_threatened_count <- 55  # All endemic
+iucn_threatened_count <- 53  # All endemic
 future_iucn_total <- current_diversity_total - iucn_threatened_count
 future_iucn_endemic <- current_diversity_endemic - iucn_threatened_count
 future_iucn_non_endemic <- non_endemic_species_count  
@@ -135,14 +137,14 @@ future_iucn_non_endemic <- non_endemic_species_count
 # Lineage-specific data for Diverity-Dependent models (m1)
 # Current diversity by lineage (endemic, non-endemic)
 current_diversity_by_lineage <- rbind(
-  c(32, 0),  # silverswords 34 - 2 (extinct)
+  c(31, 0),  # silverswords 34 - 3 = 31 (extinct)
   c(20, 0),  # bidens 20 - 0
   c(16, 0),  # lipochaeta 20 - 4
   c(8, 0),   # tetramolopium 12 - 4
   c(4, 0),   # hesperomannia 4 - 0
   c(3, 0),   # artemisia 3 - 0
   c(3, 0),   # keysseria 3 - 0
-  c(3, 0),   # remya 3 - 0
+  c(2, 0),   # remya 3 - 1
   c(1, 0),   # pseudo sandwicensium a 1 - 0
   c(1, 0),   # pseudo sandwicensium b 1 - 0
   c(1, 0),   # pseudo sandwicensium c 1 - 0
@@ -151,14 +153,14 @@ current_diversity_by_lineage <- rbind(
 
 # Future IUCN-threatened diversity by lineage (endemic, non-endemic)
 future_diversity_by_lineage <- rbind(
-  c(10, 0),  # silverswords 34 - 2 (extinct) - 22 (threatened)
+  c(10, 0),  # silverswords 34 - 3 (extinct) - 21 (threatened)
   c(6, 0),   # bidens 20 - 0 - 14
   c(10, 0),  # lipochaeta 20 - 4 - 6
   c(4, 0),   # tetramolopium 12 - 4 - 4
   c(0, 0),   # hesperomannia 4 - 0 - 4
   c(2, 0),   # artemisia 3 - 0 - 1
   c(1, 0),   # keysseria 3 - 0 - 2
-  c(1, 0),   # remya 3 - 0 - 2
+  c(1, 0),   # remya 3 - 1 - 1
   c(1, 0),   # pseudo sandwicensium a 1 - 0 - 0
   c(1, 0),   # pseudo sandwicensium b 1 - 0 - 0
   c(1, 0),   # pseudo sandwicensium c 1 - 0 - 0
@@ -166,7 +168,7 @@ future_diversity_by_lineage <- rbind(
 )
 
 #-----------------------------------
-# 4. ERT ANALYSIS: Max Age M1 (DD)
+# 4. ERT ANALYSIS: Max Age 6.15myr
 #-----------------------------------
 
 #---
@@ -175,7 +177,7 @@ future_diversity_by_lineage <- rbind(
 
 # First, convert the lineage-specific data to total counts for DAISIE_margprobdist
 current_to_prehuman_start_maxage <- c(sum(current_diversity_by_lineage[,1]), 
-                                  sum(current_diversity_by_lineage[,2]))
+                                      sum(current_diversity_by_lineage[,2]))
 
 # Calculate expected species numbers over time using ExpEIN2 for M1
 current_to_prehuman_exp_maxage <- DAISIE_ExpEIN2(
@@ -228,7 +230,7 @@ recovery_time_extinct_95_maxage <- calculate_recovery_time(
 
 # Convert the lineage-specific data to total counts for DAISIE_margprobdist
 future_to_current_start_maxage <- c(sum(future_diversity_by_lineage[,1]), 
-                                sum(future_diversity_by_lineage[,2]))
+                                    sum(future_diversity_by_lineage[,2]))
 
 # Calculate expected species numbers over time using ExpEIN2 for M1
 future_to_current_exp_maxage <- DAISIE_ExpEIN2(
@@ -284,7 +286,7 @@ recovery_time_future_prehuman_95_maxage <- calculate_recovery_time(
 )
 
 #-----------------------------------
-# 5. ERT ANALYSIS: Precise M1 (DD)
+# 5. ERT ANALYSIS: Precise 6.15myr (DD)
 #-----------------------------------
 
 #---
@@ -293,7 +295,7 @@ recovery_time_future_prehuman_95_maxage <- calculate_recovery_time(
 
 # First, convert the lineage-specific data to total counts for DAISIE_margprobdist
 current_to_prehuman_start_precise <- c(sum(current_diversity_by_lineage[,1]), 
-                                      sum(current_diversity_by_lineage[,2]))
+                                       sum(current_diversity_by_lineage[,2]))
 
 # Calculate expected species numbers over time using ExpEIN2 for M1
 current_to_prehuman_exp_precise <- DAISIE_ExpEIN2(
@@ -343,7 +345,7 @@ recovery_time_extinct_95_precise <- calculate_recovery_time(
 
 # Convert the lineage-specific data to total counts for DAISIE_margprobdist
 future_to_current_start_precise <- c(sum(future_diversity_by_lineage[,1]), 
-                                    sum(future_diversity_by_lineage[,2]))
+                                     sum(future_diversity_by_lineage[,2]))
 
 # Calculate expected species numbers over time using ExpEIN2 for M1
 future_to_current_exp_precise <- DAISIE_ExpEIN2(
@@ -433,7 +435,7 @@ ert_results <- data.frame(
 
 print(ert_results)
 
-write_xlsx(ert_results, "../outputs/DAISIE_ERT_results.xlsx")
+write_xlsx(ert_results, "../outputs/DAISIE5_ERT_results.xlsx")
 
 #-----------------------------------
 # 7. PLOT ERTS
@@ -694,6 +696,6 @@ ERT_plots_precise
 ERT_plots_maxage_precise <- current_to_prehuman_combined + future_to_current_combined
 ERT_plots_maxage_precise
 
-ggsave("../outputs/ERT_plots_maxage_raw.pdf", ERT_plots_maxage, width = 8, height = 4)
-ggsave("../outputs/ERT_plots_precise_raw.pdf", ERT_plots_precise, width = 8, height = 4)
-ggsave("../outputs/ERT_plots_maxage_precise_raw.pdf", ERT_plots_maxage_precise , width = 6.5, height = 4)
+ggsave("../outputs/DAISIE5_ERT_plots_maxage_6.15myr_raw.pdf", ERT_plots_maxage, width = 8, height = 4)
+ggsave("../outputs/DAISIE5_ERT_plots_precise_6.15myr_raw.pdf", ERT_plots_precise, width = 8, height = 4)
+ggsave("../outputs/DAISIE5_ERT_plots_maxage_precise_6.15myr_raw.pdf", ERT_plots_maxage_precise , width = 6.5, height = 4)
