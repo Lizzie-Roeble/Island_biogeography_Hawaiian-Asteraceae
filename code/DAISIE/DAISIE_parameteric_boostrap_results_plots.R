@@ -1,12 +1,12 @@
-#####################################################
+###############################################
 # DAISIE 
 # Parametric bootstrap: results - plots and summary    
-#####################################################
+# Updated with DAISIE5
+###############################################
 
-# Goal 1: Plot the results of the parametric bootstrap analysis for both datasets
+# Goal 1: Plot the results of the parametric bootstrap analysis for all four datasets (maxage and precise, 5.14myr and 6.15myr)
 # Goal 2: Summary table of ML parameter estimates, median value from simulations, and confidence intervals
-
-# Note: now plots from combined pre-filtered results (1000 replicates >= 1 nonendemic)
+# Note: plots from pre-filtered results (first 1000 replicates >= 1 nonendemic)
 
 library(ggplot2)
 library(dplyr)
@@ -14,7 +14,16 @@ library(patchwork)
 library(tidyr)
 library(writexl)
 
+# Plot font (Gill Sans; on Windows use "Gill Sans MT")
+plot_font <- "Gill Sans"
+
+# PDF device using macOS Quartz 
+pdf_device <- function(filename, width, height, ...) {
+  grDevices::quartz(file = filename, type = "pdf", width = width, height = height)
+}
+
 # Helper functions
+
 # create pairwise scatter plot
 create_scatter_plot <- function(data, x_var, y_var, x_true, y_true,
                                 log_x = FALSE, log_y = FALSE) {
@@ -37,7 +46,7 @@ create_scatter_plot <- function(data, x_var, y_var, x_true, y_true,
       x = var_labels[[x_var]],
       y = var_labels[[y_var]]
     ) +
-    theme_classic()
+    theme_classic(base_family = plot_font)
   
   # Apply log scaling if requested
   if (log_x) {
@@ -70,7 +79,7 @@ remove_axis_labels <- function(plot, remove_x = TRUE, remove_y = TRUE) {
 # Main bootstrap analysis function
 run_daisie_bootstrap_analysis <- function(input_path, output_label) {
   
-  # Load bootstrap results (already pre-filtered combined results)
+  # Load bootstrap results (already pre-filtered results)
   bootstrap_results <- read.table(input_path, header = FALSE)
   colnames(bootstrap_results) <- c(
     "Replicate", "Island_age", "Mainland_pool", "Type", "Res", "Model", 
@@ -79,6 +88,9 @@ run_daisie_bootstrap_analysis <- function(input_path, output_label) {
     "Number_parameters_type2", "Cladogenesis_MLE", "Extinction_MLE", 
     "Carrying_Capacity_MLE", "Colonization_MLE", "Anagenesis_MLE"
   )
+  
+  # Report number of replicates used
+  cat(output_label, "- number of replicates:", nrow(bootstrap_results), "\n")
   
   # Extract MLE values from first row
   original_mle <- c(
@@ -105,7 +117,7 @@ run_daisie_bootstrap_analysis <- function(input_path, output_label) {
     geom_vline(xintercept = parameter_stats$Cladogenesis_median, color = "black", linewidth = 1) +
     geom_vline(xintercept = original_mle["Cladogenesis"], color = "red", linewidth = 1) +
     labs(x = "Cladogenesis", y = "Cladogenesis") +
-    theme_classic() +
+    theme_classic(base_family = plot_font) +
     theme(plot.margin = margin(5, 5, 5, 5))
   
   ext_plot <- ggplot(data.frame(value = bootstrap_results$Extinction), aes(x = value)) +
@@ -113,7 +125,7 @@ run_daisie_bootstrap_analysis <- function(input_path, output_label) {
     geom_vline(xintercept = parameter_stats$Extinction_median, color = "black", linewidth = 1) +
     geom_vline(xintercept = original_mle["Extinction"], color = "red", linewidth = 1) +
     labs(x = "Extinction", y = "Frequency") +
-    theme_classic() +
+    theme_classic(base_family = plot_font) +
     theme(plot.margin = margin(5, 5, 5, 5))
   
   k_plot <- ggplot(data.frame(value = bootstrap_results$Carrying_Capacity), aes(x = value)) +
@@ -122,7 +134,7 @@ run_daisie_bootstrap_analysis <- function(input_path, output_label) {
     geom_vline(xintercept = original_mle["Carrying_Capacity"], color = "red", linewidth = 1) +
     scale_x_log10() +
     labs(x = "Carrying Capacity", y = "Frequency") +
-    theme_classic() +
+    theme_classic(base_family = plot_font) +
     theme(plot.margin = margin(5, 5, 5, 5))
   
   col_plot <- ggplot(data.frame(value = bootstrap_results$Colonization), aes(x = value)) +
@@ -130,7 +142,7 @@ run_daisie_bootstrap_analysis <- function(input_path, output_label) {
     geom_vline(xintercept = parameter_stats$Colonization_median, color = "black", linewidth = 1) +
     geom_vline(xintercept = original_mle["Colonization"], color = "red", linewidth = 1) +
     labs(x = "Colonization", y = "Frequency") +
-    theme_classic() +
+    theme_classic(base_family = plot_font) +
     theme(plot.margin = margin(5, 5, 5, 5))+
     scale_x_continuous(labels = scales::label_number(accuracy = 0.0001))
   
@@ -139,19 +151,18 @@ run_daisie_bootstrap_analysis <- function(input_path, output_label) {
     geom_vline(xintercept = parameter_stats$Anagenesis_median, color = "black", linewidth = 1) +
     geom_vline(xintercept = original_mle["Anagenesis"], color = "red", linewidth = 1) +
     labs(x = "Anagenesis", y = "Frequency") +
-    theme_classic() +
+    theme_classic(base_family = plot_font) +
     theme(plot.margin = margin(5, 5, 5, 5))
   
   hist_combined <- clado_plot + ext_plot + k_plot + col_plot + ana_plot
-  ggsave(paste0("../outputs/DAISIE_parametric_bootstrap_results_", output_label, "_histo_raw.pdf"), 
-         hist_combined, width = 11, height = 7, units = "in")
+  
+  ggsave(paste0("../outputs/DAISIE5_parametric_bootstrap_results_", output_label, "_histo_raw.pdf"), 
+         hist_combined, width = 11, height = 7, units = "in", device = pdf_device)
   
   # Pairwise scatter matrix
   parameter_df <- bootstrap_results %>%
     select(Cladogenesis, Extinction, Carrying_Capacity, Colonization, Anagenesis) %>%
     filter(if_all(everything(), is.finite))
-  
-  # (Your full scatter plot matrix block — unchanged — remains here)
   
   clado_ext_plot <- create_scatter_plot(parameter_df, "Cladogenesis", "Extinction", original_mle["Cladogenesis"], original_mle["Extinction"])
   clado_k_plot <- create_scatter_plot(parameter_df, "Cladogenesis", "Carrying_Capacity", original_mle["Cladogenesis"], original_mle["Carrying_Capacity"], log_y = TRUE)
@@ -201,8 +212,8 @@ run_daisie_bootstrap_analysis <- function(input_path, output_label) {
       clado_ana_plot + ext_ana_plot + k_ana_plot + col_ana_plot + ana_plot2
   ) + plot_layout(nrow = 5, ncol = 5)
   
-  ggsave(paste0("../outputs/DAISIE_parametric_bootstrap_results_", output_label, "_histo_scatter_raw.pdf"), 
-         parameter_matrix, width = 11, height = 8, units = "in")
+  ggsave(paste0("../outputs/DAISIE5_parametric_bootstrap_results_", output_label, "_histo_scatter_raw.pdf"), 
+         parameter_matrix, width = 11, height = 8, units = "in", device = pdf_device)
   
   # Confidence intervals
   ci_stats <- bootstrap_results %>%
@@ -245,15 +256,27 @@ run_daisie_bootstrap_analysis <- function(input_path, output_label) {
     )
   )
   
-  write_xlsx(summary_table, paste0("../outputs/DAISIE_parametric_bootstrap_results_", output_label, "_summary_table.xlsx"))
+  write_xlsx(summary_table, paste0("../outputs/DAISIE5_parametric_bootstrap_results_", output_label, "_summary_table.xlsx"))
 }
 
-# Run for both datasets (now simplified — no replicate filter needed)
+# Run for all four datasets (no replicate filter needed)
+
 run_daisie_bootstrap_analysis(
-  "../outputs/DAISIE_parametric_bootstrap_sims_maxage_m1.txt", # input 1000 filtered bootstrap results
-  "maxage_m1"
+  "../data/DAISIE5_sims/DAISIE5_parametric_bootstrap_results_maxage_5.14myr.txt", # input 1000 filtered bootstrap results
+  "maxage_5.14myr"
 )
+
 run_daisie_bootstrap_analysis(
-  "../outputs/DAISIE_parametric_bootstrap_sims_precise_m1.txt", # input 1000 filtered bootstrap results
-  "precise_m1"
+  "../data/DAISIE5_sims/DAISIE5_parametric_bootstrap_results_maxage_6.15myr.txt", # input 1000 filtered bootstrap results
+  "maxage_6.15myr"
+)
+
+run_daisie_bootstrap_analysis(
+  "../data/DAISIE5_sims/DAISIE5_parametric_bootstrap_results_precise_5.14myr.txt", # input 1000 filtered bootstrap results
+  "precise_5.14myr"
+)
+
+run_daisie_bootstrap_analysis(
+  "../data/DAISIE5_sims/DAISIE5_parametric_bootstrap_results_precise_6.15myr.txt", # input 1000 filtered bootstrap results
+  "precise_6.15myr"
 )
